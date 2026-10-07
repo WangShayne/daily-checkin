@@ -89,6 +89,18 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_run_logs_created
                     ON run_logs(created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS recorded_flows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_id INTEGER NOT NULL UNIQUE,
+                    final_url TEXT NOT NULL DEFAULT '',
+                    cookies_json TEXT NOT NULL DEFAULT '[]',
+                    storage_state_json TEXT NOT NULL DEFAULT '{}',
+                    steps_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+                );
                 """
             )
             # Default settings
@@ -338,6 +350,93 @@ class Database:
                 """
             ).fetchall()
         return {int(r["site_id"]): dict(r) for r in rows if r["site_id"] is not None}
+
+
+
+    # --- recorded flows (cookies stay in /data volume) ---
+
+    def save_recorded_flow(
+        self,
+        site_id: int,
+        *,
+        final_url: str,
+        cookies: list | dict,
+        storage_state: dict,
+        steps: list,
+    ) -> int:
+        now = _now_iso()
+        cookies_json = json.dumps(cookies, ensure_ascii=False)
+        storage_json = json.dumps(storage_state or {}, ensure_ascii=False)
+        steps_json = json.dumps(steps or [], ensure_ascii=False)
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM recorded_flows WHERE site_id = ?", (site_id,)
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE recorded_flows SET
+                        final_url=?, cookies_json=?, storage_state_json=?,
+                        steps_json=?, updated_at=?
+                    WHERE site_id=?
+                    """,
+                    (final_url, cookies_json, storage_json, steps_json, now, site_id),
+                )
+                return int(row["id"])
+            cur = conn.execute(
+                """
+                INSERT INTO recorded_flows (
+                    site_id, final_url, cookies_json, storage_state_json,
+                    steps_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (site_id, final_url, cookies_json, storage_json, steps_json, now, now),
+            )
+            return int(cur.lastrowid)
+
+    def get_recorded_flow(self, site_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM recorded_flows WHERE site_id = ?", (site_id,)
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "site_id": row["site_id"],
+            "final_url": row["final_url"],
+            "cookies": json.loads(row["cookies_json"] or "[]"),
+            "storage_state": json.loads(row["storage_state_json"] or "{}"),
+            "steps": json.loads(row["steps_json"] or "[]"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def has_recorded_flow(self, site_id: int) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM recorded_flows WHERE site_id = ?", (site_id,)
+            ).fetchone()
+        return row is not None
+
+    def delete_recorded_flow(self, site_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM recorded_flows WHERE site_id = ?", (site_id,))
+
+    def list_flow_summaries(self) -> dict[int, dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT site_id, final_url, updated_at, steps_json FROM recorded_flows"
+            ).fetchall()
+        out: dict[int, dict[str, Any]] = {}
+        for r in rows:
+            steps = json.loads(r["steps_json"] or "[]")
+            out[int(r["site_id"])] = {
+                "final_url": r["final_url"],
+                "updated_at": r["updated_at"],
+                "step_count": len(steps),
+            }
+        return out
 
 
 _db: Database | None = None

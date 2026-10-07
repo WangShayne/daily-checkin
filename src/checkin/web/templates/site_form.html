@@ -35,8 +35,11 @@
         <option value="visit" {% if site and site.mode == 'visit' %}selected{% endif %}>
           仅访问 — 每天打开页面即可
         </option>
-        <option value="click" {% if not site or site.mode != 'visit' %}selected{% endif %}>
+        <option value="click" {% if not site or site.mode == 'click' %}selected{% endif %}>
           点击/提交 — POST 表单 / API / 按钮
+        </option>
+        <option value="recorded" {% if site and site.mode == 'recorded' %}selected{% endif %}>
+          录制回放 — 使用「录制」页保存的浏览器流程
         </option>
       </select>
     </label>

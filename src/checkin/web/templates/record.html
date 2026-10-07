@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}录制会话 — 每日自动签到{% endblock %}
+{% block content %}
+<section class="toolbar">
+  <h1>浏览器录制</h1>
+  <a class="btn" href="/">← 返回</a>
+</section>
+
+{% if request.query_params.get('ok') %}
+<div class="alert ok">录制已保存。该站点模式已设为「录制回放」，之后定时任务会自动回放。</div>
+{% endif %}
+{% if request.query_params.get('err') %}
+<div class="alert error">{{ request.query_params.get('err') }}</div>
+{% endif %}
+
+{% if session.active %}
+<div class="card" style="margin-bottom:1rem">
+  <p>有进行中的录制会话（站点 #{{ session.site_id }}）。
+    <a class="btn primary" href="/record/session">继续录制画面</a>
+  </p>
+</div>
+{% endif %}
+
+<div class="grid-2">
+  <section class="card">
+    <h2>选择已有站点并开始录制</h2>
+    {% if not sites %}
+    <p class="muted">还没有站点，请先在右侧快速创建，或去「添加站点」。</p>
+    {% else %}
+    <form method="post" action="/record/start" class="form">
+      <label>站点
+        <select name="site_id" required>
+          {% for site in sites %}
+          <option value="{{ site.id }}">
+            {{ site.name }} — {{ site.base_url }}
+            {% if flows.get(site.id) %}（已有录制 {{ flows[site.id].step_count }} 步）{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="btn primary" type="submit">🎥 开始录制会话</button>
+    </form>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>快速新建并录制</h2>
+    <form method="post" action="/record/quick-site" class="form">
+      <label>名称 *
+        <input name="name" required placeholder="例如：某某论坛">
+      </label>
+      <label>基础 URL *
+        <input name="base_url" required placeholder="https://example.com">
+      </label>
+      <label>起始路径（可选）
+        <input name="checkin_path" placeholder="/ 或 /login">
+      </label>
+      <button class="btn primary" type="submit">创建并打开浏览器</button>
+    </form>
+  </section>
+</div>
+
+<section class="help-card" style="margin-top:1.25rem">
+  <h2>怎么用</h2>
+  <ol>
+    <li>选择或新建站点 → 开始录制（容器内会启动 Chromium + noVNC）。</li>
+    <li>在嵌入的远程桌面里<strong>手动登录</strong>并完成一次签到。</li>
+    <li>点击「完成录制」：保存 Cookie / 本地存储与导航、POST 步骤到数据卷。</li>
+    <li>站点模式变为「录制回放」，每日调度会无头回放该流程。</li>
+  </ol>
+  <p class="muted small">凭证仅保存在 Docker Volume（<code>/data</code>），请勿提交数据库文件。</p>
+</section>
+{% endblock %}

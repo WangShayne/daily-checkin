@@ -28,6 +28,7 @@ from checkin.models import (
     SiteConfig,
 )
 from checkin.scheduler import reload_jobs, shutdown_scheduler, start_scheduler
+from checkin.web.record_routes import register_record_routes
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,8 @@ def _site_from_form(
     mode_norm = mode.strip().lower()
     if mode_norm in ("visit", "visit-only", "visit_only"):
         mode_norm = CheckInMode.VISIT.value
+    elif mode_norm in ("recorded", "record", "browser", "replay"):
+        mode_norm = CheckInMode.RECORDED.value
     else:
         mode_norm = CheckInMode.CLICK.value
 
@@ -440,6 +443,8 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
+
+    register_record_routes(app, tpl=_tpl)
 
     return app
 

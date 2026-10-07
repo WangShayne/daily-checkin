@@ -9,7 +9,7 @@ from typing import Any
 
 class CheckInStatus(str, Enum):
     SUCCESS = "success"
-    ALREADY = "already"  # already checked in today (idempotent OK)
+    ALREADY = "already"
     FAILED = "failed"
     SKIPPED = "skipped"
 
@@ -17,19 +17,22 @@ class CheckInStatus(str, Enum):
 class CheckInMode(str, Enum):
     """How to perform the daily check-in."""
 
-    VISIT = "visit"  # just open / GET the site URL
-    CLICK = "click"  # submit / click a check-in action (POST/form/API)
+    VISIT = "visit"
+    CLICK = "click"
+    RECORDED = "recorded"  # replay saved browser flow
 
 
-SITE_TYPES = ("forum", "portal", "http_form")
+SITE_TYPES = ("forum", "portal", "http_form", "browser")
 MODE_LABELS = {
     CheckInMode.VISIT.value: "仅访问（打开页面即算签到）",
     CheckInMode.CLICK.value: "点击/提交（需 POST / 表单 / API）",
+    CheckInMode.RECORDED.value: "录制回放（浏览器登录流程）",
 }
 TYPE_LABELS = {
     "forum": "论坛",
     "portal": "门户 / API",
     "http_form": "通用 HTTP 表单",
+    "browser": "浏览器录制",
 }
 
 
@@ -50,8 +53,7 @@ class SiteConfig:
     body: dict[str, Any] | list[Any] | str | None = None
     success_keywords: list[str] = field(default_factory=list)
     success_status: list[int] = field(default_factory=lambda: [200])
-    # Schedule: either daily_time "HH:MM" (Asia/Shanghai) or cron expression
-    schedule_type: str = "daily"  # daily | cron
+    schedule_type: str = "daily"
     daily_time: str = "09:00"
     cron: str = "0 9 * * *"
     id: int | None = None
@@ -89,10 +91,11 @@ class SiteConfig:
         extra = {k: v for k, v in data.items() if k not in known}
         if extra:
             kwargs["extra"] = extra
-        # Normalize mode aliases
         mode = str(kwargs.get("mode", "click")).strip().lower()
         if mode in ("visit", "visit-only", "visit_only", "open"):
             kwargs["mode"] = CheckInMode.VISIT.value
+        elif mode in ("recorded", "record", "browser", "replay"):
+            kwargs["mode"] = CheckInMode.RECORDED.value
         elif mode in ("click", "button", "submit", "post"):
             kwargs["mode"] = CheckInMode.CLICK.value
         else:
@@ -140,3 +143,17 @@ class CheckInResult:
             CheckInStatus.ALREADY,
             CheckInStatus.SKIPPED,
         )
+
+
+@dataclass
+class RecordedFlow:
+    """Saved browser session + steps for replay."""
+
+    site_id: int
+    final_url: str = ""
+    cookies: list[dict[str, Any]] = field(default_factory=list)
+    storage_state: dict[str, Any] = field(default_factory=dict)
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    id: int | None = None
+    created_at: str = ""
+    updated_at: str = ""

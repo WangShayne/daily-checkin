@@ -18,6 +18,7 @@ def test_registry_contains_builtins() -> None:
     assert "forum" in ADAPTER_REGISTRY
     assert "portal" in ADAPTER_REGISTRY
     assert "http_form" in ADAPTER_REGISTRY
+    assert "browser" in ADAPTER_REGISTRY
     assert isinstance(get_adapter("forum"), ForumAdapter)
     assert isinstance(get_adapter("PORTAL"), PortalAdapter)
     assert isinstance(get_adapter("http_form"), HttpFormAdapter)

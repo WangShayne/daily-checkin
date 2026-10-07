@@ -182,3 +182,21 @@ legend { padding: 0 0.35rem; color: var(--muted); font-size: 0.85rem; }
   font-size: 0.9rem;
 }
 .nav-user { font-size: 0.85rem; }
+
+.badge.recorded { background: #d97706; }
+.alert.ok {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.85rem;
+}
+.vnc-frame {
+  width: 100%;
+  height: min(70vh, 720px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #111;
+  box-shadow: var(--shadow);
+}

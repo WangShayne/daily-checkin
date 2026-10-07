@@ -9,10 +9,12 @@ services:
     environment:
       CHECKIN_DATA_DIR: /data
       TZ: Asia/Shanghai
-      # Change these in production (or use an env_file)
       CHECKIN_USER: ${CHECKIN_USER:-admin}
       CHECKIN_PASSWORD: ${CHECKIN_PASSWORD:-changeme}
       CHECKIN_SESSION_SECRET: ${CHECKIN_SESSION_SECRET:-please-change-this-session-secret}
+      CHECKIN_DISPLAY: ":99"
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    shm_size: "256mb"
     restart: unless-stopped
 
 volumes:

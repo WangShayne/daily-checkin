@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}录制中 — 每日自动签到{% endblock %}
+{% block content %}
+<section class="toolbar">
+  <h1>录制会话{% if site %} — {{ site.name }}{% endif %}</h1>
+  <div class="actions">
+    <form method="post" action="/record/finish" style="display:inline"
+          onsubmit="return confirm('确认已在远程桌面完成登录与签到？');">
+      <button class="btn primary" type="submit">✅ 完成录制</button>
+    </form>
+    <form method="post" action="/record/cancel" style="display:inline"
+          onsubmit="return confirm('取消并丢弃本次录制？');">
+      <button class="btn danger" type="submit">取消</button>
+    </form>
+  </div>
+</section>
+
+{% if error %}
+<div class="alert error">{{ error }}</div>
+{% endif %}
+
+{% if not session.active %}
+<p class="empty">当前没有活动录制。<a href="/record">返回录制页</a></p>
+{% else %}
+<div class="card" style="margin-bottom:0.75rem">
+  <div class="muted small">
+    状态：<strong>{{ session.status }}</strong>
+    · 步骤数：{{ session.step_count }}
+    · 当前 URL：{{ session.current_url or '-' }}
+    · 开始：{{ session.started_at }}
+  </div>
+  {% if session.vnc_password %}
+  <div class="muted small">VNC 密码（若客户端要求）：<code id="vnc-pass">{{ session.vnc_password }}</code></div>
+  {% endif %}
+</div>
+
+{% if novnc_ok %}
+<iframe
+  id="vnc-frame"
+  class="vnc-frame"
+  title="远程浏览器"
+  src="/novnc/vnc.html?path=ws%2Fvnc&autoconnect=true&resize=scale&reconnect=true&password={{ session.vnc_password }}"
+  allow="clipboard-read; clipboard-write"
+></iframe>
+{% else %}
+<div class="alert error">
+  镜像中未找到 noVNC（/usr/share/novnc）。请使用项目 Dockerfile 构建。
+  若你在本机有 DISPLAY，仍可能已启动 Chromium；完成后可直接点「完成录制」保存 Cookie。
+</div>
+{% endif %}
+
+<p class="muted small" style="margin-top:0.75rem">
+  提示：在画面中完成登录与签到后点「完成录制」。本页每 5 秒刷新步骤计数。
+</p>
+<script>
+setInterval(async () => {
+  try {
+    const r = await fetch('/api/record/status');
+    const j = await r.json();
+    if (!j.active) return;
+    document.title = '录制中 (' + j.step_count + ')';
+  } catch (e) {}
+}, 5000);
+</script>
+{% endif %}
+{% endblock %}

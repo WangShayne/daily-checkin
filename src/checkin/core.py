@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any
 
-from checkin.adapters import get_adapter
+from checkin.adapters import get_adapter_for_site
 from checkin.db import get_db
 from checkin.models import CheckInResult, CheckInStatus, SiteConfig
 from checkin.notifier import notify
@@ -48,7 +48,7 @@ def run_sites(
             "[%s] 开始签到 (type=%s mode=%s)", site.name, site.type, site.mode
         )
         try:
-            adapter = get_adapter(site.type)
+            adapter = get_adapter_for_site(site)
             result = adapter.check_in(site, timeout=timeout)
             result.site_id = site.id
             result.mode = result.mode or site.mode

@@ -4,6 +4,7 @@
 <section class="toolbar">
   <h1>站点列表</h1>
   <div class="actions">
+    <a class="btn" href="/record">🎥 录制会话</a>
     <a class="btn" href="/sites/new">＋ 添加站点</a>
     <form method="post" action="/run" style="display:inline">
       <button class="btn primary" type="submit">▶ 全部立即签到</button>
@@ -38,6 +39,8 @@
       <td>
         {% if site.mode == 'visit' %}
         <span class="badge visit">仅访问</span>
+        {% elif site.mode == 'recorded' %}
+        <span class="badge recorded">录制回放</span>
         {% else %}
         <span class="badge click">点击/提交</span>
         {% endif %}
@@ -63,6 +66,7 @@
           <button class="btn sm" type="submit">签到</button>
         </form>
         <a class="btn sm" href="/sites/{{ site.id }}/edit">编辑</a>
+        <a class="btn sm" href="/record">录制</a>
         <form method="post" action="/sites/{{ site.id }}/delete" style="display:inline"
               onsubmit="return confirm('确定删除「{{ site.name }}」？');">
           <button class="btn sm danger" type="submit">删除</button>
@@ -79,6 +83,7 @@
   <ul>
     <li><strong>仅访问（visit）</strong>：每天打开 / GET 目标 URL 即算完成，适合「进站就算签到」的站点。</li>
     <li><strong>点击/提交（click）</strong>：需要 POST 表单、点签到按钮或调用签到 API。</li>
+    <li><strong>录制回放（recorded）</strong>：在「录制」页用嵌入浏览器登录并签到一次，之后自动回放。</li>
   </ul>
 </section>
 {% endblock %}

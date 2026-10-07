@@ -6,6 +6,7 @@
 |------|------|
 | **仅访问（visit）** | 每天打开 / GET 目标 URL 即算完成，适合「进站就算签到」 |
 | **点击/提交（click）** | 需要 POST 表单、点签到按钮或调用签到 API |
+| **录制回放（recorded）** | 嵌入浏览器登录并录制一次，之后自动回放 |
 
 内置可插拔 Adapter：`forum` / `portal` / `http_form`。容器内用 APScheduler 按 Asia/Shanghai 定时执行，配置与日志持久化到 Docker Volume（SQLite）。
 
@@ -68,6 +69,25 @@ docker compose up -d --build
 5. 设置计划：每天固定时间（如 `09:00`）或 Cron（如 `0 9 * * *`），时区 **Asia/Shanghai**
 6. 保存后可点 **签到** 立即试跑，在 **日志** 页查看结果
 
+
+## 浏览器录制（推荐用于复杂登录）
+
+容器内使用 **Playwright Chromium + Xvfb + x11vnc + noVNC**：
+
+1. 登录管理界面 → 顶部 **录制**
+2. 选择站点或快速新建（类型会变为「浏览器录制」）
+3. 点击开始后，页面嵌入远程桌面；在画面中**手动登录并完成签到**
+4. 点击 **完成录制**：Cookie、localStorage（storage_state）以及导航 / POST 步骤写入 `/data` 卷中的 SQLite
+5. 站点模式自动设为 `recorded`；定时任务与「立即签到」会无头回放该流程
+
+架构要点：
+
+- Web UI（4567）需登录；noVNC 静态资源同样走已登录会话
+- VNC 仅监听容器内 `127.0.0.1`，经 `/ws/vnc` 代理，不额外暴露端口
+- 回放使用 Playwright headless + 保存的 `storage_state`，并重放末几步导航与最后一次 POST
+
+> 首次构建镜像会下载 Chromium，体积较大。需要 `shm_size`（compose 已设 256mb）。
+
 ## 签到方式详解
 
 ### 仅访问（visit）
@@ -98,6 +118,7 @@ docker compose up -d --build
 | `forum` | 论坛插件签到、需 Cookie 的 POST |
 | `portal` | 门户 / JSON API 签到 |
 | `http_form` | 通用表单字段 + Cookie |
+| `browser` | 浏览器录制回放（配合 mode=recorded） |
 
 也可自行扩展 Adapter：继承 `Adapter`，实现 `do_click()`（`do_visit()` 已在基类提供），注册到 `ADAPTER_REGISTRY`。
 
@@ -147,12 +168,13 @@ pytest -q
 ```
 daily-checkin/
 ├── Dockerfile
-├── docker-compose.yml   # 端口 4567 + 登录环境变量
+├── docker-compose.yml   # 端口 4567、登录环境变量、shm_size
 ├── README.md
 ├── config.example.yaml
 ├── src/checkin/
 │   ├── web/           # FastAPI + Jinja 可视化界面
-│   ├── adapters/      # forum / portal / http_form
+│   ├── adapters/      # forum / portal / http_form / recorded
+│   ├── browser/       # Playwright + noVNC 录制会话
 │   ├── db.py          # SQLite 持久化
 │   ├── scheduler.py   # APScheduler（Asia/Shanghai）
 │   ├── core.py        # 签到编排
