@@ -1,3 +1,3 @@
-"""Daily multi-site auto check-in tool."""
+"""Daily multi-site auto check-in tool with Docker web UI."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

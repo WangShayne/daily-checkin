@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}运行日志 — 每日自动签到{% endblock %}
+{% block content %}
+<section class="toolbar">
+  <h1>运行日志</h1>
+  <a class="btn" href="/">← 返回</a>
+</section>
+
+{% if not logs %}
+<p class="empty">暂无运行记录。可在首页点击「立即签到」。</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>时间</th>
+      <th>站点</th>
+      <th>方式</th>
+      <th>状态</th>
+      <th>触发</th>
+      <th>HTTP</th>
+      <th>说明</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for log in logs %}
+    <tr>
+      <td class="small">{{ log.created_at }}</td>
+      <td>{{ log.site_name }}</td>
+      <td>{{ log.mode or '-' }}</td>
+      <td><span class="status-{{ log.status }}">{{ log.status }}</span></td>
+      <td class="small">{{ log.triggered_by }}</td>
+      <td>{{ log.http_status or '-' }}</td>
+      <td class="small">{{ log.message }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

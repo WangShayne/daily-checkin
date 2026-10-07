@@ -23,6 +23,10 @@ secrets/
 cookies/
 *.session
 
+# Runtime data (SQLite volume contents)
+data/
+*.db
+
 # IDE / OS
 .idea/
 .vscode/
@@ -33,3 +37,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Never commit CI workflows for this project
+.github/

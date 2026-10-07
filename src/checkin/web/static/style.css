@@ -1,0 +1,154 @@
+:root {
+  --bg: #f4f6f8;
+  --card: #fff;
+  --text: #1a1d21;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --primary: #2563eb;
+  --danger: #dc2626;
+  --visit: #059669;
+  --click: #7c3aed;
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.85rem 1.5rem;
+  background: #111827;
+  color: #fff;
+}
+.topbar a { color: #fff; }
+.brand { display: flex; gap: 0.75rem; align-items: baseline; font-weight: 700; }
+.brand .muted { color: #9ca3af; font-weight: 400; font-size: 0.85rem; }
+nav { display: flex; gap: 1rem; }
+.container { width: min(1100px, 94%); margin: 1.5rem auto; flex: 1; }
+.footer {
+  text-align: center;
+  padding: 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.toolbar h1 { margin: 0; font-size: 1.4rem; }
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.btn {
+  display: inline-block;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+.btn:hover { background: #f9fafb; text-decoration: none; }
+.btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn.primary:hover { filter: brightness(1.05); }
+.btn.danger { color: var(--danger); border-color: #fecaca; }
+.btn.sm { padding: 0.25rem 0.55rem; font-size: 0.8rem; }
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.table th, .table td {
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.table th { background: #f9fafb; font-size: 0.85rem; color: var(--muted); }
+.muted { color: var(--muted); }
+.small { font-size: 0.8rem; }
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: #fff;
+}
+.badge.visit { background: var(--visit); }
+.badge.click { background: var(--click); }
+.status-success, .status-already, .status-skipped { color: var(--visit); font-weight: 600; }
+.status-failed { color: var(--danger); font-weight: 600; }
+.row-actions { white-space: nowrap; }
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+}
+.form label {
+  display: block;
+  margin-bottom: 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.form input, .form select, .form textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 400;
+}
+.form textarea { font-family: ui-monospace, monospace; font-size: 0.85rem; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1rem; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem 1rem; }
+@media (max-width: 720px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0.5rem 0 1rem;
+  padding: 0.75rem 1rem;
+}
+legend { padding: 0 0.35rem; color: var(--muted); font-size: 0.85rem; }
+.form-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+.check { font-weight: 500 !important; display: flex !important; align-items: center; gap: 0.5rem; }
+.check input { width: auto !important; margin: 0 !important; }
+.empty {
+  background: var(--card);
+  padding: 2rem;
+  border-radius: var(--radius);
+  text-align: center;
+  color: var(--muted);
+  box-shadow: var(--shadow);
+}
+.help-card {
+  margin-top: 1.5rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+}
+.help-card h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+.help-card ul { margin: 0; padding-left: 1.2rem; color: #1e3a8a; }

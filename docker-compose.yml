@@ -1,0 +1,15 @@
+services:
+  checkin:
+    build: .
+    container_name: daily-checkin
+    ports:
+      - "8080:8080"
+    volumes:
+      - checkin-data:/data
+    environment:
+      CHECKIN_DATA_DIR: /data
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+
+volumes:
+  checkin-data:

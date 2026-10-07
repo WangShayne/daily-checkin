@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from checkin.adapters.base import Adapter
-from checkin.models import CheckInResult, CheckInStatus, SiteConfig
+from checkin.models import CheckInMode, CheckInResult, CheckInStatus, SiteConfig
 
 logger = logging.getLogger(__name__)
 
@@ -14,26 +14,31 @@ class ForumAdapter(Adapter):
     """
     Forum pattern: authenticated session cookie + POST to a check-in endpoint.
 
-    Many Chinese forums (Discuz plugins, custom boards) expose a dedicated
-    sign URL; customize checkin_path / form_data / success_keywords per site.
+    mode=visit: GET the page (daily visit counts).
+    mode=click: POST form / plugin sign URL.
     """
 
-    def check_in(self, site: SiteConfig, *, timeout: int = 30) -> CheckInResult:
+    def do_click(self, site: SiteConfig, *, timeout: int = 30) -> CheckInResult:
         if not site.cookies:
             return CheckInResult(
                 site_name=site.name,
                 status=CheckInStatus.FAILED,
                 message="缺少 cookies（论坛签到通常需要登录态）",
+                site_id=site.id,
+                mode=CheckInMode.CLICK.value,
             )
         try:
             form = site.form_data or {"operation": "qiandao"}
-            # Prefer form; some forums accept empty body
             response = self.request(site, timeout=timeout, data=form)
-            return self.evaluate_response(site, response)
+            result = self.evaluate_response(site, response)
+            result.mode = CheckInMode.CLICK.value
+            return result
         except Exception as exc:  # noqa: BLE001
-            logger.exception("forum check-in failed for %s", site.name)
+            logger.exception("forum click failed for %s", site.name)
             return CheckInResult(
                 site_name=site.name,
                 status=CheckInStatus.FAILED,
                 message=str(exc),
+                site_id=site.id,
+                mode=CheckInMode.CLICK.value,
             )

@@ -1,4 +1,4 @@
-"""Base adapter ABC."""
+"""Base adapter ABC with first-class visit / click modes."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 
 import requests
 
-from checkin.models import CheckInResult, CheckInStatus, SiteConfig
+from checkin.models import CheckInMode, CheckInResult, CheckInStatus, SiteConfig
 
 logger = logging.getLogger(__name__)
 
@@ -17,15 +17,55 @@ logger = logging.getLogger(__name__)
 class Adapter(ABC):
     """Pluggable check-in backend for one site type."""
 
-    @abstractmethod
     def check_in(self, site: SiteConfig, *, timeout: int = 30) -> CheckInResult:
-        """Perform check-in for the given site. Must be safe to re-run daily."""
+        """Dispatch by mode: visit (GET page) or click (submit action)."""
+        mode = site.mode_enum
+        if mode == CheckInMode.VISIT:
+            return self.do_visit(site, timeout=timeout)
+        return self.do_click(site, timeout=timeout)
+
+    def do_visit(self, site: SiteConfig, *, timeout: int = 30) -> CheckInResult:
+        """Visit-only: open / GET the site URL each day counts as check-in."""
+        try:
+            url = self.build_url(site)
+            session = self.session_for(site)
+            logger.debug("VISIT GET %s", url)
+            response = session.get(url, timeout=timeout, allow_redirects=True)
+            # For visit mode, default success is any 2xx/3xx unless keywords set
+            statuses = site.success_status or [200, 301, 302, 303, 307, 308]
+            # Temporarily evaluate with visit-friendly defaults
+            original = site.success_status
+            site.success_status = statuses
+            try:
+                result = self.evaluate_response(site, response)
+            finally:
+                site.success_status = original
+            if result.status == CheckInStatus.SUCCESS and not site.success_keywords:
+                result.message = f"访问成功 HTTP {response.status_code}"
+            result.mode = CheckInMode.VISIT.value
+            result.site_id = site.id
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("visit failed for %s", site.name)
+            return CheckInResult(
+                site_name=site.name,
+                status=CheckInStatus.FAILED,
+                message=str(exc),
+                site_id=site.id,
+                mode=CheckInMode.VISIT.value,
+            )
+
+    @abstractmethod
+    def do_click(self, site: SiteConfig, *, timeout: int = 30) -> CheckInResult:
+        """Click/button mode: POST form, API call, or other submit action."""
 
     # --- shared helpers ---
 
     def build_url(self, site: SiteConfig) -> str:
         base = site.base_url.rstrip("/") + "/"
-        path = site.checkin_path.lstrip("/")
+        path = (site.checkin_path or "").lstrip("/")
+        if not path:
+            return site.base_url.rstrip("/") or base.rstrip("/")
         return urljoin(base, path)
 
     def parse_cookies(self, cookies: str | dict[str, str] | None) -> dict[str, str]:
@@ -67,6 +107,8 @@ class Adapter(ABC):
                 status=CheckInStatus.ALREADY,
                 message="今日已签到（幂等成功）",
                 http_status=response.status_code,
+                site_id=site.id,
+                mode=site.mode,
             )
 
         keywords = site.success_keywords or []
@@ -78,6 +120,8 @@ class Adapter(ABC):
                     status=CheckInStatus.SUCCESS,
                     message="签到成功",
                     http_status=response.status_code,
+                    site_id=site.id,
+                    mode=site.mode,
                 )
             if not matched:
                 snippet = text[:200].replace("\n", " ")
@@ -86,6 +130,8 @@ class Adapter(ABC):
                     status=CheckInStatus.FAILED,
                     message=f"未匹配成功关键字；响应片段: {snippet}",
                     http_status=response.status_code,
+                    site_id=site.id,
+                    mode=site.mode,
                 )
 
         if status_ok:
@@ -94,6 +140,8 @@ class Adapter(ABC):
                 status=CheckInStatus.SUCCESS,
                 message=f"HTTP {response.status_code}",
                 http_status=response.status_code,
+                site_id=site.id,
+                mode=site.mode,
             )
 
         snippet = text[:200].replace("\n", " ")
@@ -102,6 +150,8 @@ class Adapter(ABC):
             status=CheckInStatus.FAILED,
             message=f"HTTP {response.status_code}; {snippet}",
             http_status=response.status_code,
+            site_id=site.id,
+            mode=site.mode,
         )
 
     def request(

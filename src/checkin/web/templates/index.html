@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}站点列表 — 每日自动签到{% endblock %}
+{% block content %}
+<section class="toolbar">
+  <h1>站点列表</h1>
+  <div class="actions">
+    <a class="btn" href="/sites/new">＋ 添加站点</a>
+    <form method="post" action="/run" style="display:inline">
+      <button class="btn primary" type="submit">▶ 全部立即签到</button>
+    </form>
+  </div>
+</section>
+
+{% if not sites %}
+<p class="empty">还没有站点。点击「添加站点」，选择类型与签到方式（仅访问 / 点击提交）。</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>名称</th>
+      <th>类型</th>
+      <th>方式</th>
+      <th>计划</th>
+      <th>启用</th>
+      <th>最近结果</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for site in sites %}
+    {% set last = latest.get(site.id) if site.id else none %}
+    <tr>
+      <td>
+        <strong>{{ site.name }}</strong>
+        <div class="muted small">{{ site.base_url }}{{ site.checkin_path }}</div>
+      </td>
+      <td>{{ type_labels.get(site.type, site.type) }}</td>
+      <td>
+        {% if site.mode == 'visit' %}
+        <span class="badge visit">仅访问</span>
+        {% else %}
+        <span class="badge click">点击/提交</span>
+        {% endif %}
+      </td>
+      <td class="small">
+        {% if site.schedule_type == 'cron' %}
+        cron: {{ site.cron }}
+        {% else %}
+        每天 {{ site.daily_time }}
+        {% endif %}
+      </td>
+      <td>{% if site.enabled %}✅{% else %}⏸{% endif %}</td>
+      <td class="small">
+        {% if last %}
+        <span class="status-{{ last.status }}">{{ last.status }}</span>
+        <div class="muted">{{ last.created_at }}</div>
+        {% else %}
+        <span class="muted">暂无</span>
+        {% endif %}
+      </td>
+      <td class="row-actions">
+        <form method="post" action="/sites/{{ site.id }}/run" style="display:inline">
+          <button class="btn sm" type="submit">签到</button>
+        </form>
+        <a class="btn sm" href="/sites/{{ site.id }}/edit">编辑</a>
+        <form method="post" action="/sites/{{ site.id }}/delete" style="display:inline"
+              onsubmit="return confirm('确定删除「{{ site.name }}」？');">
+          <button class="btn sm danger" type="submit">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<section class="help-card">
+  <h2>签到方式说明</h2>
+  <ul>
+    <li><strong>仅访问（visit）</strong>：每天打开 / GET 目标 URL 即算完成，适合「进站就算签到」的站点。</li>
+    <li><strong>点击/提交（click）</strong>：需要 POST 表单、点签到按钮或调用签到 API。</li>
+  </ul>
+</section>
+{% endblock %}
