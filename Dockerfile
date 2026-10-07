@@ -3,7 +3,9 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     CHECKIN_DATA_DIR=/data \
-    TZ=Asia/Shanghai
+    TZ=Asia/Shanghai \
+    CHECKIN_USER=admin \
+    CHECKIN_PASSWORD=changeme
 
 WORKDIR /app
 
@@ -21,8 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 RUN mkdir -p /data
 
-EXPOSE 8080
+EXPOSE 4567
 
 VOLUME ["/data"]
 
-CMD ["uvicorn", "checkin.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "checkin.web.app:app", "--host", "0.0.0.0", "--port", "4567"]

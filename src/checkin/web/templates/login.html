@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 — 每日自动签到</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <h1>🗓️ 每日自动签到</h1>
+    <p class="muted">请登录后管理站点与签到任务</p>
+    {% if error %}
+    <div class="alert error">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login" class="form">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>用户名
+        <input name="username" required autocomplete="username" autofocus placeholder="admin">
+      </label>
+      <label>密码
+        <input name="password" type="password" required autocomplete="current-password" placeholder="••••••••">
+      </label>
+      <button class="btn primary block" type="submit">登录</button>
+    </form>
+    <p class="hint muted small">默认账号见 README / 环境变量 CHECKIN_USER、CHECKIN_PASSWORD。部署后请尽快修改。</p>
+  </main>
+</body>
+</html>

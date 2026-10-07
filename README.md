@@ -21,11 +21,32 @@ cd daily-checkin
 docker compose up -d --build
 ```
 
-浏览器打开：**http://localhost:8080**
+浏览器打开：**http://localhost:4567**，先登录管理界面。
 
 数据目录挂载为命名卷 `checkin-data`（容器内 `/data`），重启不丢站点与日志。
 
-### 2. 常用命令
+### 2. 登录账号（务必修改）
+
+Web UI **必须登录**后才能管理站点。通过环境变量配置：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CHECKIN_USER` | `admin` | 登录用户名 |
+| `CHECKIN_PASSWORD` | `changeme` | 登录密码 |
+| `CHECKIN_SESSION_SECRET` | （示例占位） | 会话 Cookie 签名密钥，生产环境请换成随机长字符串 |
+
+```bash
+# 方式 A：项目根目录 .env（docker compose 会读取）
+cp .env.example .env
+# 编辑 CHECKIN_USER / CHECKIN_PASSWORD / CHECKIN_SESSION_SECRET
+
+# 方式 B：启动时传入
+CHECKIN_USER=myuser CHECKIN_PASSWORD='strong-pass' docker compose up -d --build
+```
+
+默认 `admin` / `changeme` 仅方便初次试用；**对公网或局域网暴露前请改掉**。右上角可「退出」登出。
+
+### 3. 常用命令
 
 ```bash
 # 查看日志
@@ -38,7 +59,7 @@ docker compose down
 docker compose up -d --build
 ```
 
-### 3. 在网页里做什么
+### 4. 在网页里做什么
 
 1. 打开首页 → **添加站点**
 2. 填写名称、基础 URL、路径
@@ -84,8 +105,10 @@ docker compose up -d --build
 
 | 位置 | 用途 |
 |------|------|
+| `CHECKIN_USER` / `CHECKIN_PASSWORD` | Web UI 登录（默认 admin / changeme，务必修改） |
+| `CHECKIN_SESSION_SECRET` | 会话签名密钥 |
 | 网页表单中的 Cookies / Headers | 写入 SQLite（Volume），勿把卷内容提交到公开仓库 |
-| `.env`（本地 CLI，已 gitignore） | YAML 配置里的 `${VAR}` 占位 |
+| `.env`（本地 CLI，已 gitignore） | 登录账号与 YAML `${VAR}` 占位 |
 | Webhook URL（设置页） | 可选，签到汇总推送 |
 
 **切勿**提交：`.env`、含真实 Cookie 的配置、导出的 cookie 文件、数据库文件。Cookie 等同登录凭证，泄露等于账号被接管。
@@ -98,7 +121,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 export CHECKIN_DATA_DIR=./data
-uvicorn checkin.web.app:app --host 0.0.0.0 --port 8080 --reload
+export CHECKIN_USER=admin
+export CHECKIN_PASSWORD=changeme
+uvicorn checkin.web.app:app --host 0.0.0.0 --port 4567 --reload
+# 浏览器 http://localhost:4567
 ```
 
 CLI（YAML 配置，适合脚本调试）：
@@ -121,7 +147,7 @@ pytest -q
 ```
 daily-checkin/
 ├── Dockerfile
-├── docker-compose.yml
+├── docker-compose.yml   # 端口 4567 + 登录环境变量
 ├── README.md
 ├── config.example.yaml
 ├── src/checkin/

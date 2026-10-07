@@ -1,21 +1,24 @@
-"""FastAPI application: visual UI + scheduler."""
+"""FastAPI application: visual UI + scheduler + session login."""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
 from checkin import __version__
-from checkin.core import run_all_from_db, run_one_site, summarize
+from checkin.core import run_all_from_db, run_one_site
 from checkin.db import get_db, init_db
 from checkin.models import (
     MODE_LABELS,
@@ -31,6 +34,45 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# Public paths that do not require login
+PUBLIC_PATHS = frozenset({"/login", "/logout", "/health"})
+
+DEFAULT_USER = "admin"
+DEFAULT_PASSWORD = "changeme"
+
+
+def _auth_username() -> str:
+    return os.environ.get("CHECKIN_USER", DEFAULT_USER).strip() or DEFAULT_USER
+
+
+def _auth_password() -> str:
+    return os.environ.get("CHECKIN_PASSWORD", DEFAULT_PASSWORD)
+
+
+def _session_secret() -> str:
+    secret = os.environ.get("CHECKIN_SESSION_SECRET", "").strip()
+    if secret:
+        return secret
+    # Stable-enough fallback for single-instance; override in production
+    return os.environ.get(
+        "CHECKIN_SESSION_SECRET_FALLBACK",
+        "daily-checkin-dev-secret-change-me",
+    )
+
+
+def _is_logged_in(request: Request) -> bool:
+    return bool(request.session.get("user"))
+
+
+def _cred_ok(given: str, expected: str) -> bool:
+    """Constant-time compare; unequal lengths are never equal."""
+    g = given.encode("utf-8")
+    e = expected.encode("utf-8")
+    if len(g) != len(e):
+        secrets.compare_digest(e, e)
+        return False
+    return secrets.compare_digest(g, e)
+
 
 def _parse_json_field(raw: str | None, default: Any = None) -> Any:
     text = (raw or "").strip()
@@ -39,7 +81,6 @@ def _parse_json_field(raw: str | None, default: Any = None) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Allow simple key=value;key2=value2 for form_data
         if default == {} or isinstance(default, dict):
             result: dict[str, str] = {}
             for part in text.split("&"):
@@ -119,6 +160,16 @@ def _site_from_form(
     )
 
 
+def _tpl(request: Request, name: str, context: dict[str, Any] | None = None) -> HTMLResponse:
+    ctx = {
+        "version": __version__,
+        "current_user": request.session.get("user"),
+    }
+    if context:
+        ctx.update(context)
+    return TEMPLATES.TemplateResponse(request, name, ctx)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     data_dir = os.environ.get("CHECKIN_DATA_DIR", "data")
@@ -129,7 +180,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     start_scheduler()
-    logger.info("Daily Check-in Web UI v%s ready", __version__)
+    user = _auth_username()
+    if _auth_password() == DEFAULT_PASSWORD:
+        logger.warning(
+            "正在使用默认密码（用户 %s / changeme）。请通过环境变量 "
+            "CHECKIN_USER / CHECKIN_PASSWORD 修改！",
+            user,
+        )
+    logger.info("Daily Check-in Web UI v%s ready (port default 4567)", __version__)
     yield
     shutdown_scheduler()
 
@@ -140,12 +198,76 @@ def create_app() -> FastAPI:
     static_dir.mkdir(exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    @app.middleware("http")
+    async def require_login(request: Request, call_next):  # type: ignore[no-untyped-def]
+        path = request.url.path
+        if path.startswith("/static") or path in PUBLIC_PATHS:
+            return await call_next(request)
+        if _is_logged_in(request):
+            return await call_next(request)
+        next_url = path
+        if request.url.query:
+            next_url = f"{path}?{request.url.query}"
+        return RedirectResponse(
+            url=f"/login?next={quote(next_url, safe='')}",
+            status_code=303,
+        )
+
+    # Outermost: session must wrap auth so request.session is available
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=_session_secret(),
+        session_cookie="checkin_session",
+        max_age=60 * 60 * 24 * 7,  # 7 days
+        same_site="lax",
+        https_only=False,
+    )
+
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_page(request: Request, next: str = "/") -> HTMLResponse:
+        if _is_logged_in(request):
+            return RedirectResponse(next or "/", status_code=303)
+        return _tpl(
+            request,
+            "login.html",
+            {"error": None, "next": next or "/"},
+        )
+
+    @app.post("/login")
+    async def login_submit(
+        request: Request,
+        username: str = Form(...),
+        password: str = Form(...),
+        next: str = Form("/"),
+    ) -> Response:
+        ok = _cred_ok(username.strip(), _auth_username()) and _cred_ok(
+            password, _auth_password()
+        )
+        if not ok:
+            return _tpl(
+                request,
+                "login.html",
+                {
+                    "error": "用户名或密码错误",
+                    "next": next or "/",
+                },
+            )
+        request.session["user"] = username.strip()
+        dest = next if next.startswith("/") else "/"
+        return RedirectResponse(dest, status_code=303)
+
+    @app.get("/logout")
+    @app.post("/logout")
+    async def logout(request: Request) -> RedirectResponse:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
         db = get_db()
         sites = db.list_sites()
         latest = db.latest_result_by_site()
-        return TEMPLATES.TemplateResponse(
+        return _tpl(
             request,
             "index.html",
             {
@@ -153,13 +275,12 @@ def create_app() -> FastAPI:
                 "latest": latest,
                 "mode_labels": MODE_LABELS,
                 "type_labels": TYPE_LABELS,
-                "version": __version__,
             },
         )
 
     @app.get("/sites/new", response_class=HTMLResponse)
     async def site_new(request: Request) -> HTMLResponse:
-        return TEMPLATES.TemplateResponse(
+        return _tpl(
             request,
             "site_form.html",
             {
@@ -176,7 +297,7 @@ def create_app() -> FastAPI:
         site = get_db().get_site(site_id)
         if site is None:
             return RedirectResponse("/", status_code=303)
-        return TEMPLATES.TemplateResponse(
+        return _tpl(
             request,
             "site_form.html",
             {
@@ -289,22 +410,13 @@ def create_app() -> FastAPI:
 
     @app.get("/logs", response_class=HTMLResponse)
     async def logs(request: Request) -> HTMLResponse:
-        db = get_db()
-        entries = db.list_run_logs(limit=200)
-        return TEMPLATES.TemplateResponse(
-            request,
-            "logs.html",
-            {"logs": entries, "version": __version__},
-        )
+        entries = get_db().list_run_logs(limit=200)
+        return _tpl(request, "logs.html", {"logs": entries})
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request) -> HTMLResponse:
         settings = get_db().get_settings()
-        return TEMPLATES.TemplateResponse(
-            request,
-            "settings.html",
-            {"settings": settings, "version": __version__},
-        )
+        return _tpl(request, "settings.html", {"settings": settings})
 
     @app.post("/settings")
     async def settings_save(

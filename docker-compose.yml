@@ -3,12 +3,16 @@ services:
     build: .
     container_name: daily-checkin
     ports:
-      - "8080:8080"
+      - "4567:4567"
     volumes:
       - checkin-data:/data
     environment:
       CHECKIN_DATA_DIR: /data
       TZ: Asia/Shanghai
+      # Change these in production (or use an env_file)
+      CHECKIN_USER: ${CHECKIN_USER:-admin}
+      CHECKIN_PASSWORD: ${CHECKIN_PASSWORD:-changeme}
+      CHECKIN_SESSION_SECRET: ${CHECKIN_SESSION_SECRET:-please-change-this-session-secret}
     restart: unless-stopped
 
 volumes:

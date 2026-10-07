@@ -18,13 +18,17 @@
       <a href="/sites/new">添加</a>
       <a href="/logs">日志</a>
       <a href="/settings">设置</a>
+      {% if current_user %}
+      <span class="nav-user muted">{{ current_user }}</span>
+      <a href="/logout">退出</a>
+      {% endif %}
     </nav>
   </header>
   <main class="container">
     {% block content %}{% endblock %}
   </main>
   <footer class="footer">
-    <span>时区：Asia/Shanghai · Docker 部署 · 请勿提交 Cookie / Token</span>
+    <span>时区：Asia/Shanghai · 端口 4567 · 请勿提交 Cookie / Token</span>
   </footer>
 </body>
 </html>
