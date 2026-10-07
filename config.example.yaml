@@ -1,0 +1,58 @@
+# 复制为 config.yaml 后按需修改。敏感值请用环境变量，勿写入真实凭证。
+# 环境变量占位：${VAR_NAME} 会在加载时从环境 / .env 替换。
+
+settings:
+  # 请求超时（秒）
+  timeout: 30
+  # 站点之间间隔（秒），降低被限流风险
+  delay_between_sites: 2
+  # 失败时是否继续签到其他站点
+  continue_on_error: true
+
+# 可选通知：成功/失败汇总推送到 webhook
+notification:
+  enabled: false
+  webhook_url: "${NOTIFY_WEBHOOK_URL}"
+
+sites:
+  # 论坛类：典型「每日签到」POST 接口 + Cookie
+  - name: "示例论坛"
+    type: forum
+    enabled: true
+    base_url: "https://forum.example.com"
+    checkin_path: "/plugin.php?id=k_misign:sign"
+    method: POST
+    headers:
+      User-Agent: "Mozilla/5.0 (compatible; DailyCheckin/0.1)"
+      Referer: "https://forum.example.com/"
+    cookies: "${FORUM_DEMO_COOKIE}"
+    # 可选：响应中需包含的成功关键字
+    success_keywords: ["签到成功", "已签到", "success"]
+
+  # 门户 / 首页签到类
+  - name: "示例门户"
+    type: portal
+    enabled: true
+    base_url: "https://portal.example.com"
+    checkin_path: "/api/user/checkin"
+    method: POST
+    headers:
+      Authorization: "Bearer ${PORTAL_DEMO_TOKEN}"
+      Content-Type: "application/json"
+    # 可选 JSON body
+    body:
+      action: "daily"
+    success_keywords: ["ok", "success", "已签到"]
+
+  # 通用 HTTP 表单 / Cookie 签到
+  - name: "示例表单站点"
+    type: http_form
+    enabled: false
+    base_url: "https://site.example.com"
+    checkin_path: "/user/signin"
+    method: POST
+    form_data:
+      do: "checkin"
+    cookies: "${HTTP_FORM_DEMO_COOKIE}"
+    success_status: [200, 302]
+    success_keywords: ["签到成功"]
