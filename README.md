@@ -70,6 +70,22 @@ docker compose up -d --build
 6. 保存后可点 **签到** 立即试跑，在 **日志** 页查看结果
 
 
+
+## 自测示例站
+
+仓库内带有 `examples/test-site`（账号 `demo` / `demo`），`docker compose up` 会一并启动在 **:5001**。
+
+```bash
+docker compose up -d --build
+# 管理端 http://localhost:4567  admin / changeme
+# 示例站 http://localhost:5001  demo / demo
+
+docker exec -e TEST_SITE_URL=http://host.docker.internal:5001 \
+  daily-checkin python examples/e2e_against_test_site.py
+```
+
+详细说明见 [examples/README.md](examples/README.md)。
+
 ## 浏览器录制（推荐用于复杂登录）
 
 容器内使用 **Playwright Chromium + Xvfb + x11vnc + noVNC**：

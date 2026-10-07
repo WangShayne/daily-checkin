@@ -14,7 +14,20 @@ services:
       CHECKIN_SESSION_SECRET: ${CHECKIN_SESSION_SECRET:-please-change-this-session-secret}
       CHECKIN_DISPLAY: ":99"
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # Reach published test-site port on the host (works even when ICC is flaky)
+      TEST_SITE_URL: ${TEST_SITE_URL:-http://host.docker.internal:5001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     shm_size: "256mb"
+    depends_on:
+      - test-site
+    restart: unless-stopped
+
+  test-site:
+    build: ./examples/test-site
+    container_name: checkin-test-site
+    ports:
+      - "5001:5001"
     restart: unless-stopped
 
 volumes:
