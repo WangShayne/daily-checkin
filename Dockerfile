@@ -13,6 +13,8 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
+    procps \
+    psmisc \
     xvfb \
     x11vnc \
     novnc \

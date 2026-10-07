@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin
@@ -22,6 +23,7 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 DISPLAY = os.environ.get("CHECKIN_DISPLAY", ":99")
 VNC_PORT = int(os.environ.get("CHECKIN_VNC_PORT", "5900"))
 WEBSOCKIFY_PORT = int(os.environ.get("CHECKIN_WEBSOCKIFY_PORT", "6080"))
+XVFB_PID_FILE = Path(os.environ.get("CHECKIN_XVFB_PID_FILE", "/tmp/checkin-xvfb.pid"))
 
 
 def _now() -> str:
@@ -44,6 +46,66 @@ class ActiveSession:
     page: Any = None
     procs: list[subprocess.Popen[Any]] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+
+def _terminate_pid(pid: int, *, name: str = "proc") -> None:
+    """Best-effort terminate a process by PID."""
+    if pid <= 0:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        logger.debug("无权限结束 %s pid=%s", name, pid)
+        return
+    time.sleep(0.2)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _kill_stale_display() -> None:
+    """Clear a previous Xvfb on DISPLAY without requiring pkill.
+
+    Prefer PID file from last launch; optionally use pkill/killall if present.
+    Never raise if the helper binary is missing.
+    """
+    # 1) PID file from our previous start
+    try:
+        if XVFB_PID_FILE.exists():
+            raw = XVFB_PID_FILE.read_text(encoding="utf-8").strip()
+            if raw.isdigit():
+                _terminate_pid(int(raw), name="Xvfb")
+            XVFB_PID_FILE.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.debug("清理 Xvfb PID 文件失败: %s", exc)
+
+    # 2) Optional pkill / killall (procps / psmisc) — ignore if absent
+    pattern = f"Xvfb {DISPLAY}"
+    for cmd in (
+        ["pkill", "-f", pattern],
+        ["killall", "-q", "Xvfb"],
+    ):
+        binary = shutil.which(cmd[0])
+        if not binary:
+            continue
+        try:
+            subprocess.run(
+                [binary, *cmd[1:]],
+                check=False,
+                capture_output=True,
+            )
+        except FileNotFoundError:
+            logger.debug("%s 不可用，跳过", cmd[0])
+        except OSError as exc:
+            logger.debug("调用 %s 失败: %s", cmd[0], exc)
 
 
 class RecordingManager:
@@ -125,12 +187,8 @@ class RecordingManager:
             raise RuntimeError(
                 "未找到 Xvfb。请使用项目 Dockerfile 构建镜像后录制。"
             )
-        # Kill stale display if any
-        subprocess.run(
-            ["pkill", "-f", f"Xvfb {DISPLAY}"],
-            check=False,
-            capture_output=True,
-        )
+        # Kill stale display if any (PID file + optional pkill)
+        _kill_stale_display()
         xvfb = subprocess.Popen(
             [
                 "Xvfb",
@@ -146,6 +204,10 @@ class RecordingManager:
             stderr=subprocess.DEVNULL,
         )
         session.procs.append(xvfb)
+        try:
+            XVFB_PID_FILE.write_text(str(xvfb.pid), encoding="utf-8")
+        except OSError as exc:
+            logger.debug("无法写入 Xvfb PID 文件: %s", exc)
         time.sleep(0.4)
         os.environ["DISPLAY"] = DISPLAY
 
@@ -339,7 +401,8 @@ class RecordingManager:
     def _cleanup_procs(self, session: ActiveSession) -> None:
         for proc in reversed(session.procs):
             try:
-                proc.send_signal(signal.SIGTERM)
+                if proc.poll() is None:
+                    proc.send_signal(signal.SIGTERM)
             except Exception:  # noqa: BLE001
                 pass
         time.sleep(0.2)
@@ -350,6 +413,10 @@ class RecordingManager:
             except Exception:  # noqa: BLE001
                 pass
         session.procs.clear()
+        try:
+            XVFB_PID_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 _manager: RecordingManager | None = None
