@@ -11,7 +11,11 @@ from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from checkin.browser.recorder import build_start_url, get_recording_manager
+from checkin.browser.recorder import (
+    VNC_PORT,
+    build_start_url,
+    get_recording_manager,
+)
 from checkin.db import get_db
 from checkin.models import CheckInMode, SiteConfig
 
@@ -55,7 +59,7 @@ def register_record_routes(
         )
 
     @app.post("/record/start")
-    async def record_start(
+    def record_start(
         request: Request,
         site_id: int = Form(...),
     ) -> RedirectResponse:
@@ -74,7 +78,7 @@ def register_record_routes(
         return RedirectResponse("/record/session", status_code=303)
 
     @app.post("/record/quick-site")
-    async def record_quick_site(
+    def record_quick_site(
         name: str = Form(...),
         base_url: str = Form(...),
         checkin_path: str = Form(""),
@@ -120,8 +124,16 @@ def register_record_routes(
     async def record_status() -> JSONResponse:
         return JSONResponse(get_recording_manager().status())
 
+    @app.get("/api/record/diag")
+    def record_diag() -> JSONResponse:
+        """Troubleshooting: Xvfb / x11vnc processes and RFB handshake."""
+        data = get_recording_manager().diagnostics()
+        data["novnc_static"] = _find_novnc() is not None
+        data["ws_path"] = "/ws/vnc"
+        return JSONResponse(data)
+
     @app.post("/record/finish")
-    async def record_finish() -> RedirectResponse:
+    def record_finish() -> RedirectResponse:
         mgr = get_recording_manager()
         try:
             payload = mgr.finish()
@@ -152,31 +164,64 @@ def register_record_routes(
         return RedirectResponse(f"/record?ok=1&site_id={site_id}", status_code=303)
 
     @app.post("/record/cancel")
-    async def record_cancel() -> RedirectResponse:
+    def record_cancel() -> RedirectResponse:
         get_recording_manager().cancel()
         return RedirectResponse("/record", status_code=303)
 
     @app.websocket("/ws/vnc")
     async def vnc_ws(websocket: WebSocket) -> None:
-        # Session cookie auth (http middleware does not cover WS)
-        user = websocket.session.get("user") if hasattr(websocket, "session") else None
-        # Starlette SessionMiddleware stores session in scope
+        """noVNC <-> x11vnc bridge.
+
+        The browser speaks WebSocket (binary frames carrying RFB); x11vnc speaks
+        raw RFB over TCP. This endpoint *is* the websockify: it unwraps frames
+        and pipes bytes to 127.0.0.1:VNC_PORT. Served on the same host:port as
+        the UI (4567), so LAN access like http://192.168.x.x:4567 just works.
+        """
+        client = websocket.client.host if websocket.client else "?"
+        requested = websocket.scope.get("subprotocols") or []
+        subprotocol = "binary" if "binary" in requested else None
+
         session_data = websocket.scope.get("session") or {}
-        if not session_data.get("user") and not user:
-            await websocket.close(code=4401)
+        if not session_data.get("user"):
+            logger.warning("VNC WebSocket 拒绝：未登录 (client=%s)", client)
+            await websocket.accept(subprotocol=subprotocol)
+            await websocket.close(code=4401, reason="not logged in")
             return
-        await websocket.accept()
-        mgr = get_recording_manager().status()
-        if not mgr.get("active"):
-            await websocket.close(code=1013)
+
+        mgr = get_recording_manager()
+        st = mgr.status()
+        if not st.get("active"):
+            logger.warning("VNC WebSocket 拒绝：没有活动录制会话 (client=%s)", client)
+            await websocket.accept(subprotocol=subprotocol)
+            await websocket.close(code=4404, reason="no active recording session")
             return
-        port = int(mgr.get("websockify_port") or 6080)
-        try:
-            reader, writer = await asyncio.open_connection("127.0.0.1", port)
-        except Exception:  # noqa: BLE001
-            logger.exception("无法连接 websockify")
-            await websocket.close(code=1011)
+
+        # Readiness: x11vnc may still be starting — retry for a few seconds
+        reader = writer = None
+        deadline = asyncio.get_running_loop().time() + 10
+        last_err: Exception | None = None
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", VNC_PORT)
+                break
+            except OSError as exc:
+                last_err = exc
+                await asyncio.sleep(0.3)
+        if writer is None or reader is None:
+            logger.error(
+                "VNC WebSocket：无法连接 x11vnc 127.0.0.1:%s (%s)", VNC_PORT, last_err
+            )
+            await websocket.accept(subprotocol=subprotocol)
+            await websocket.close(code=1011, reason="vnc server not reachable")
             return
+
+        await websocket.accept(subprotocol=subprotocol)
+        logger.info(
+            "VNC WebSocket 已连接 client=%s -> 127.0.0.1:%s subprotocol=%s",
+            client,
+            VNC_PORT,
+            subprotocol,
+        )
 
         async def client_to_vnc() -> None:
             try:
@@ -184,17 +229,17 @@ def register_record_routes(
                     message = await websocket.receive()
                     if message["type"] == "websocket.disconnect":
                         break
-                    data = message.get("bytes") or message.get("text")
-                    if data is None:
+                    data = message.get("bytes")
+                    if data is None and message.get("text") is not None:
+                        data = message["text"].encode("latin-1", errors="ignore")
+                    if not data:
                         continue
-                    if isinstance(data, str):
-                        data = data.encode("utf-8")
                     writer.write(data)
                     await writer.drain()
-            except WebSocketDisconnect:
+            except (WebSocketDisconnect, ConnectionError):
                 pass
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("client->vnc 中断", exc_info=True)
 
         async def vnc_to_client() -> None:
             try:
@@ -204,13 +249,24 @@ def register_record_routes(
                         break
                     await websocket.send_bytes(data)
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("vnc->client 中断", exc_info=True)
 
+        tasks = [
+            asyncio.create_task(client_to_vnc()),
+            asyncio.create_task(vnc_to_client()),
+        ]
         try:
-            await asyncio.gather(client_to_vnc(), vnc_to_client())
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
+            for task in tasks:
+                task.cancel()
             writer.close()
             try:
                 await writer.wait_closed()
             except Exception:  # noqa: BLE001
                 pass
+            try:
+                await websocket.close()
+            except Exception:  # noqa: BLE001
+                pass
+            logger.info("VNC WebSocket 已断开 client=%s", client)

@@ -35,32 +35,105 @@
 </div>
 
 {% if novnc_ok %}
+<div id="vnc-status" class="vnc-status pending">远程桌面：正在连接…</div>
 <iframe
   id="vnc-frame"
   class="vnc-frame"
   title="远程浏览器"
-  src="/novnc/vnc.html?path=ws%2Fvnc&autoconnect=true&resize=scale&reconnect=true&password={{ session.vnc_password }}"
+  data-password="{{ session.vnc_password }}"
   allow="clipboard-read; clipboard-write"
 ></iframe>
+<details id="vnc-diag" class="card diag">
+  <summary>连接诊断（连不上时展开）</summary>
+  <pre id="vnc-diag-body">加载中…</pre>
+</details>
 {% else %}
 <div class="alert error">
   镜像中未找到 noVNC（/usr/share/novnc）。请使用项目 Dockerfile 构建。
-  若你在本机有 DISPLAY，仍可能已启动 Chromium；完成后可直接点「完成录制」保存 Cookie。
 </div>
 {% endif %}
 
 <p class="muted small" style="margin-top:0.75rem">
-  提示：在画面中完成登录与签到后点「完成录制」。本页每 5 秒刷新步骤计数。
+  提示：在画面中完成登录与签到后点「完成录制」。WebSocket 地址与本页同主机同端口（<code>/ws/vnc</code>），
+  通过局域网 IP 访问（如 http://192.168.x.x:4567）同样可用。
 </p>
 <script>
-setInterval(async () => {
-  try {
-    const r = await fetch('/api/record/status');
-    const j = await r.json();
-    if (!j.active) return;
-    document.title = '录制中 (' + j.step_count + ')';
-  } catch (e) {}
-}, 5000);
+(function () {
+  const frame = document.getElementById('vnc-frame');
+  const statusEl = document.getElementById('vnc-status');
+  const diagEl = document.getElementById('vnc-diag-body');
+  if (!frame) return;
+
+  // Build the WebSocket target from the page's own origin — never localhost
+  // or a separate port — so LAN IP / reverse proxy access works.
+  const loc = window.location;
+  const https = loc.protocol === 'https:';
+  const port = loc.port || (https ? '443' : '80');
+  const params = new URLSearchParams({
+    host: loc.hostname,
+    port: port,
+    encrypt: https ? '1' : '0',
+    path: 'ws/vnc',
+    password: frame.dataset.password || '',
+    autoconnect: 'true',
+    reconnect: 'true',
+    reconnect_delay: '1500',
+    resize: 'scale',
+    show_dot: 'true',
+  });
+  frame.src = '/novnc/vnc.html?' + params.toString();
+
+  function setStatus(cls, text) {
+    statusEl.className = 'vnc-status ' + cls;
+    statusEl.textContent = text;
+  }
+
+  async function loadDiag() {
+    try {
+      const r = await fetch('/api/record/diag', { credentials: 'same-origin' });
+      const j = await r.json();
+      j.page_ws_url = (https ? 'wss://' : 'ws://') + loc.host + '/ws/vnc';
+      diagEl.textContent = JSON.stringify(j, null, 2);
+      return j;
+    } catch (e) {
+      diagEl.textContent = '诊断接口请求失败: ' + e;
+      return null;
+    }
+  }
+
+  let failures = 0;
+  setInterval(async () => {
+    let cls = '';
+    try {
+      cls = frame.contentDocument && frame.contentDocument.documentElement.className;
+    } catch (e) { /* cross-origin should not happen */ }
+    if (/noVNC_connected/.test(cls)) {
+      failures = 0;
+      setStatus('ok', '远程桌面：已连接 ✅');
+    } else if (/noVNC_connecting|noVNC_reconnecting/.test(cls)) {
+      setStatus('pending', '远程桌面：正在连接…');
+    } else if (/noVNC_disconnected/.test(cls)) {
+      failures += 1;
+      if (failures === 3) {
+        const d = await loadDiag();
+        let hint = '请展开下方「连接诊断」。';
+        if (d && d.session && !d.session.active) hint = '录制会话已结束，请返回录制页重新开始。';
+        else if (d && !d.vnc_rfb_handshake) hint = 'x11vnc 未就绪（容器内 127.0.0.1:' + d.vnc_port + ' 无响应），请取消后重试或查看 docker logs。';
+        document.getElementById('vnc-diag').open = true;
+        setStatus('error', '远程桌面：无法连接。' + hint);
+      }
+    }
+  }, 1000);
+
+  loadDiag();
+  setInterval(async () => {
+    try {
+      const r = await fetch('/api/record/status', { credentials: 'same-origin' });
+      const j = await r.json();
+      if (j.active) document.title = '录制中 (' + j.step_count + ')';
+    } catch (e) {}
+  }, 5000);
+})();
 </script>
 {% endif %}
 {% endblock %}

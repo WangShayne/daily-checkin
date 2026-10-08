@@ -4,12 +4,39 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import Any
 
 from checkin.adapters.base import Adapter
 from checkin.models import CheckInMode, CheckInResult, CheckInStatus, SiteConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _run_coro_blocking(coro: Any) -> Any:
+    """Run a coroutine to completion even if this thread already has a loop.
+
+    Manual "立即签到" may be invoked from an async web handler; asyncio.run()
+    would then raise, so fall back to a short-lived helper thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    box: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            box["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001
+            box["error"] = exc
+
+    t = threading.Thread(target=runner, name="recorded-replay", daemon=True)
+    t.start()
+    t.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
 
 
 class RecordedAdapter(Adapter):
@@ -52,9 +79,7 @@ class RecordedAdapter(Adapter):
                 mode=CheckInMode.RECORDED.value,
             )
         try:
-            return asyncio.run(
-                self._replay(site, flow, timeout=timeout)
-            )
+            return _run_coro_blocking(self._replay(site, flow, timeout=timeout))
         except Exception as exc:  # noqa: BLE001
             logger.exception("recorded replay failed for %s", site.name)
             return CheckInResult(

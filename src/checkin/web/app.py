@@ -402,12 +402,12 @@ def create_app() -> FastAPI:
         return RedirectResponse("/", status_code=303)
 
     @app.post("/run")
-    async def run_all() -> RedirectResponse:
+    def run_all() -> RedirectResponse:
         run_all_from_db(triggered_by="manual")
         return RedirectResponse("/logs", status_code=303)
 
     @app.post("/sites/{site_id}/run")
-    async def run_site(site_id: int) -> RedirectResponse:
+    def run_site(site_id: int) -> RedirectResponse:
         run_one_site(site_id, triggered_by="manual")
         return RedirectResponse("/logs", status_code=303)
 

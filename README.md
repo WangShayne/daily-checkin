@@ -99,10 +99,36 @@ docker exec -e TEST_SITE_URL=http://host.docker.internal:5001 \
 架构要点：
 
 - Web UI（4567）需登录；noVNC 静态资源同样走已登录会话
-- VNC 仅监听容器内 `127.0.0.1`，经 `/ws/vnc` 代理，不额外暴露端口
+- x11vnc 仅监听容器内 `127.0.0.1:5900`；应用自身在 `/ws/vnc` 把 WebSocket 桥接到 VNC（相当于内置 websockify），不额外暴露端口
+- noVNC 的 WebSocket 地址由浏览器当前地址生成（同主机、同端口 4567），局域网 IP 访问无需额外配置
 - 回放使用 Playwright headless + 保存的 `storage_state`，并重放末几步导航与最后一次 POST
 
 > 首次构建镜像会下载 Chromium，体积较大。需要 `shm_size`（compose 已设 256mb）。
+
+
+## 故障排查：录制页「无法连接到服务器」
+
+链路：`Xvfb :99` → `x11vnc 127.0.0.1:5900` → 应用 `/ws/vnc`（同 4567 端口）→ 浏览器 noVNC iframe。
+
+1. **先更新并重建镜像**（v0.3.1 修复了 `/ws/vnc` 桥接与 noVNC 路径问题）：
+   ```bash
+   git pull
+   docker compose up -d --build
+   ```
+2. 录制页连不上时，展开页面下方 **「连接诊断」**，或直接访问 `http://<服务器IP>:4567/api/record/diag`（需登录）：
+   - `processes` 中 Xvfb / x11vnc 应为 `running: true`
+   - `vnc_rfb_handshake: true` 表示 x11vnc 正常
+   - `page_ws_url` 应是 `ws://<你访问的IP>:4567/ws/vnc`
+3. 看容器日志：
+   ```bash
+   docker compose logs -f checkin | grep -E "x11vnc|VNC WebSocket|录制"
+   ```
+   正常会看到 `x11vnc 已就绪` 和 `VNC WebSocket 已连接`。
+4. 常见原因：
+   - **浏览器缓存了旧的 noVNC 设置**：新版会显式传入当前 host/port；仍有问题可清除该站点的 localStorage 或换无痕窗口
+   - **会话已结束 / 未登录**：WebSocket 会以 4404 / 4401 关闭，回到录制页重新开始
+   - **HTTPS 反向代理**：需转发 WebSocket（`Upgrade` / `Connection` 头），页面为 https 时自动使用 `wss://`
+   - 直接用局域网 IP（如 `http://192.168.x.x:4567`）访问无需任何额外设置；只需放行 4567 端口
 
 ## 签到方式详解
 

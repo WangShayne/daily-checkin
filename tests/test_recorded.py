@@ -80,3 +80,19 @@ def test_replay_without_flow_fails(tmp_path: Path, monkeypatch) -> None:
     result = RecordedAdapter().check_in(site)
     assert result.status == CheckInStatus.FAILED
     assert "录制" in result.message or "流程" in result.message
+
+
+def test_run_coro_blocking_inside_running_loop() -> None:
+    import asyncio
+
+    from checkin.adapters.recorded import _run_coro_blocking
+
+    async def inner() -> int:
+        return 42
+
+    async def outer() -> int:
+        # simulates an async web handler calling the sync adapter
+        return _run_coro_blocking(inner())
+
+    assert asyncio.run(outer()) == 42
+    assert _run_coro_blocking(inner()) == 42

@@ -27,3 +27,13 @@ docker exec -e TEST_SITE_URL=http://host.docker.internal:5001 \
 ```
 
 录制模式由 Playwright API 自动登录并签到（不依赖 noVNC 人工操作），再回放 `RecordedAdapter`。
+
+## 录制界面 E2E（noVNC）
+
+用 Playwright 登录管理端、开始录制、等待 noVNC 连接、通过 VNC 画布键盘操作远程浏览器完成登录+签到，再点「完成录制」：
+
+```bash
+docker run --rm --network host --shm-size 256m -v "$PWD/examples:/ex" \
+  -e UI_URL=http://192.168.x.x:4567 -e TARGET_URL=http://host.docker.internal:5001 \
+  daily-checkin-checkin python /ex/e2e_record_ui.py
+```

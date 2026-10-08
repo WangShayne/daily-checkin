@@ -18,7 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     x11vnc \
     novnc \
-    websockify \
     fonts-liberation \
     fonts-noto-cjk \
     ca-certificates \
