@@ -2,13 +2,35 @@
 
 from __future__ import annotations
 
+import os
+import secrets
+import time
+
 from flask import Flask, redirect, render_template_string, request, session, url_for
+from markupsafe import escape
 
 app = Flask(__name__)
 app.secret_key = "checkin-test-secret"
 
 USER = "demo"
 PASS = "demo"
+# Second account with a distinctive password, used by the re-login E2E to grep
+# daily-checkin's data volume / logs for plaintext leaks.
+ACCOUNTS = {USER: PASS, "alice": "Wonderland-2026!"}
+
+# Server-side session generation: bumping it (POST /admin/expire) invalidates
+# every existing session cookie, simulating an expired login.
+EPOCH = int(time.time())
+# Optional max session age in seconds (0 = unlimited)
+SESSION_LIFETIME = int(os.environ.get("SESSION_LIFETIME", "0"))
+
+
+def logged_in() -> bool:
+    if not session.get("user") or session.get("epoch") != EPOCH:
+        return False
+    if SESSION_LIFETIME and time.time() - float(session.get("login_at", 0)) > SESSION_LIFETIME:
+        return False
+    return True
 
 BASE = """
 <!doctype html>
@@ -40,42 +62,48 @@ def page(title: str, body: str, msg: str = "", ok: bool = True) -> str:
 
 @app.get("/")
 def index():
-    if session.get("user"):
+    if logged_in():
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
+
+
+def login_form(username: str = "", password: str = "") -> str:
+    token = secrets.token_hex(16)
+    session["csrf"] = token
+    return f"""<form method="post" action="/login">
+          <input type="hidden" name="csrf_token" value="{token}">
+          <label>用户名<input name="username" value="{escape(username)}"></label>
+          <label>密码<input name="password" type="password" value="{escape(password)}"></label>
+          <button type="submit">登录</button>
+        </form>"""
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        if request.form.get("username") == USER and request.form.get("password") == PASS:
-            session["user"] = USER
+        sent = request.form.get("csrf_token", "")
+        expected = session.pop("csrf", None)
+        if not expected or not secrets.compare_digest(sent, expected):
+            return page("登录", login_form(), msg="CSRF 校验失败，请刷新页面重试", ok=False), 400
+        user = request.form.get("username", "")
+        if user in ACCOUNTS and request.form.get("password") == ACCOUNTS[user]:
+            session.clear()
+            session["user"] = user
+            session["epoch"] = EPOCH
+            session["login_at"] = time.time()
             session["checked_in"] = False
             return redirect(url_for("dashboard"))
-        return page(
-            "登录",
-            """<form method="post">
-              <label>用户名<input name="username"></label>
-              <label>密码<input name="password" type="password"></label>
-              <button type="submit">登录</button>
-            </form>""",
-            msg="用户名或密码错误",
-            ok=False,
-        )
-    return page(
-        "登录",
-        """<form method="post">
-          <label>用户名<input name="username" value="demo"></label>
-          <label>密码<input name="password" type="password" value="demo"></label>
-          <button type="submit">登录</button>
-        </form>
-        <p>测试账号：demo / demo</p>""",
-    )
+        return page("登录", login_form(), msg="用户名或密码错误", ok=False)
+    # ?prefill=alice pre-fills the second account (E2E convenience)
+    prefill = request.args.get("prefill", USER)
+    if prefill not in ACCOUNTS:
+        prefill = USER
+    return page("登录", login_form(prefill, ACCOUNTS[prefill]) + "<p>测试账号：demo / demo</p>")
 
 
 @app.get("/dashboard")
 def dashboard():
-    if not session.get("user"):
+    if not logged_in():
         return redirect(url_for("login"))
     status = "已签到" if session.get("checked_in") else "今日未签到"
     return page(
@@ -90,7 +118,7 @@ def dashboard():
 
 @app.post("/checkin")
 def checkin():
-    if not session.get("user"):
+    if not logged_in():
         return redirect(url_for("login")), 401
     if session.get("checked_in"):
         return page("签到", '<p><a class="btn" href="/dashboard">返回</a></p>',
@@ -107,7 +135,7 @@ def checkin():
 @app.get("/visit")
 def visit():
     """Visit-only: opening this page while logged in counts as check-in."""
-    if not session.get("user"):
+    if not logged_in():
         return redirect(url_for("login"))
     session["checked_in"] = True
     return page(
@@ -122,6 +150,14 @@ def visit():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/admin/expire", methods=["GET", "POST"])
+def admin_expire():
+    """Invalidate all sessions (simulates login expiry for E2E tests)."""
+    global EPOCH
+    EPOCH += 1
+    return {"expired": True, "epoch": EPOCH}
 
 
 @app.get("/health")

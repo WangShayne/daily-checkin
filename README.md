@@ -22,6 +22,7 @@
 - [快速开始](#快速开始)
 - [签到方式](#签到方式)
 - [浏览器录制指南](#浏览器录制指南)
+- [登录过期自动重新登录与凭据加密](#登录过期自动重新登录与凭据加密)
 - [配置与环境变量](#配置与环境变量)
 - [故障排查](#故障排查)
 - [项目结构](#项目结构)
@@ -34,6 +35,8 @@
 - **可视化管理**：站点总览、添加 / 编辑站点、运行日志、设置，全中文界面，支持深色模式和手机浏览器
 - **三种签到方式**：仅访问（visit）、点击 / 提交（click）、录制回放（recorded），详见[签到方式](#签到方式)
 - **嵌入式浏览器录制**：Playwright Chromium + noVNC 嵌入页面，手动登录并签到一次，之后自动回放
+- **登录过期自动重新登录**：回放时发现 Cookie 失效，自动用**加密保存**的密码重新登录（每次重新获取 CSRF Token），再完成签到
+- **敏感信息脱敏**：录制的请求中密码、Token、CSRF、Cookie、手机号、身份证号等字段一律以 `***` 保存，日志同样脱敏
 - **定时执行**：APScheduler，每天固定时间或 Cron 表达式，时区 Asia/Shanghai
 - **结果一目了然**：状态徽章（签到成功 / 今日已签 / 失败 / 已跳过）、今日统计、下次运行时间、按状态 / 站点筛选日志
 - **登录保护**：会话登录（`CHECKIN_USER` / `CHECKIN_PASSWORD`），未登录无法访问任何管理页面或 noVNC
@@ -60,6 +63,10 @@
 | 空状态 | 操作提示（Toast） | 手机端 |
 |---|---|---|
 | ![空状态](docs/screenshots/dashboard-empty.png) | ![提示](docs/screenshots/run-toast.png) | <img src="docs/screenshots/mobile-dashboard.png" width="240"> |
+
+**站点编辑页：已保存登录凭据（已加密）**
+
+<img src="docs/screenshots/site-credentials.png" alt="登录凭据" width="720">
 
 </details>
 
@@ -115,7 +122,7 @@ docker compose down                   # 停止（数据卷保留）
 |---|---|---|---|
 | **仅访问** `visit` | 每天打开网站 / 某页面就算签到 | 对 `基础 URL + 路径` 发 GET 请求，2xx / 3xx 或命中成功关键字即成功 | URL、通常需要 Cookie |
 | **点击 / 提交** `click` | 页面上有「签到」按钮，或有签到 API | 按站点类型发 POST（可改方法），提交表单或 JSON | URL、Cookie、可选表单 / JSON / 成功关键字 |
-| **录制回放** `recorded` | 登录流程复杂（验证码、跳转、前端加密） | 在嵌入浏览器里录制一次；回放时加载保存的 Cookie / localStorage，重放最近的导航与最后一次 POST | 只需起始 URL，在[录制页](#浏览器录制指南)完成 |
+| **录制回放** `recorded` | 登录流程复杂（跳转、前端加密、Cookie 经常过期） | 在嵌入浏览器里录制一次；回放时加载保存的 Cookie / localStorage，打开录制的页面并重新提交签到表单；登录过期时[自动重新登录](#登录过期自动重新登录与凭据加密) | 只需起始 URL，在[录制页](#浏览器录制指南)完成 |
 
 结果判定：响应中含「已签到 / 已经签到 / already / 重复签到」记为 **今日已签**（幂等成功）；请求异常或状态码不在成功列表内记为 **失败**；站点停用时记为 **已跳过**。
 
@@ -142,8 +149,43 @@ docker compose down                   # 停止（数据卷保留）
 
 - 只需放行 4567 端口；x11vnc 只监听容器内 `127.0.0.1:5900`，应用在 `/ws/vnc` 把 WebSocket 桥接到 VNC
 - noVNC 的 WebSocket 地址由浏览器当前地址生成（同主机、同端口），用局域网 IP 访问无需额外配置
-- 同一时间只能有一个录制会话；登录态过期后重新录制即可（覆盖旧录制）
-- Cookie 失效周期因站点而异，如果回放开始失败，请先重新录制
+- 同一时间只能有一个录制会话；重新录制会覆盖旧录制
+- 录制时**请从登录页开始，完成一次登录 + 签到**，这样系统才能识别登录步骤并在 Cookie 过期后自动重新登录
+
+## 登录过期自动重新登录与凭据加密
+
+**工作原理**
+
+1. **录制时识别登录**：POST 请求中含 `password` / `passwd` / `pwd` / `pass` / `secret` 等字段，或提交的表单里有 `type=password` 输入框，即标记为登录步骤，记录登录页地址、提交地址、字段名
+2. **只加密密码**：密码类字段用 Fernet（AES-128-CBC + HMAC-SHA256）加密后存入 SQLite 的 `login_credentials` 表；用户名明文保存（界面中打码显示）。数据库、日志、页面、诊断接口里都不会出现明文密码
+3. **其余请求全部脱敏**：`token`、`access_token`、`csrf`、`_token`、`authenticity_token`、`formhash`、`session`、`cookie`、`authorization`、`api_key`、`otp` / `code`、手机号、身份证号、邮箱等字段保存为 `***`（支持表单、JSON、multipart）。CSRF Token 每次会话都不同，回放时从页面重新获取，不使用录制时的旧值
+4. **回放时检测登录过期**：恢复 Cookie 并打开录制的页面后，出现以下任一情况即判定登录已过期：跳转到录制时的登录页、页面出现密码输入框、HTTP 401 / 403、或未满足站点设置的「登录状态检查」
+5. **自动重新登录**（每次运行最多 1 次）：打开录制的登录页，在真实页面中填入用户名和解密后的密码并提交（自动带上新的 CSRF Token）；页面上找不到表单时，退回为抓取新 CSRF 后直接 POST
+6. 登录成功后把**新的 Cookie / localStorage 写回数据库**，再执行签到；日志显示「登录已过期，已自动重新登录」
+7. 重新登录失败（验证码、短信、二次验证、密码已修改）时，本次记为失败，提示重新录制
+
+**站点设置**（编辑站点 → 选择「录制回放」）：
+
+- 显示「已保存登录凭据（已加密）」、登录页、最近一次自动登录的时间和结果，**不会显示密码**
+- 「清除登录凭据」删除已加密的密码
+- 「登录状态检查（可选）」：已登录页面上一定会出现的文字（如 `退出登录`），或 `css:.user-avatar` 这样的选择器。默认的自动判断不准确时再填写
+
+**加密密钥**
+
+| 方式 | 说明 |
+|---|---|
+| 环境变量 `CHECKIN_SECRET_KEY`（推荐） | 用 `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` 生成；也可以填任意长字符串（会自动派生密钥） |
+| 自动生成 `/data/secret.key` | 未设置环境变量时，首次启动自动生成（权限 0600），日志会提示备份 |
+
+- **请备份密钥**：密钥丢失或更换后，已保存的密码无法解密（会提示重新录制），录制的 Cookie 和步骤不受影响
+- 备份 / 迁移数据卷时请把 `secret.key` 与 `checkin.db` **分开保管**，或者用环境变量提供密钥、不放在卷里
+- 从旧版本升级时，启动会**自动迁移一次**：把旧录制中明文保存的密码 / Token 改为 `***`，能识别出登录步骤的会加密保存其密码，并整理（VACUUM）数据库文件，清掉残留的明文
+
+**限制**
+
+- 需要**图形验证码、短信验证码、扫码、二次验证（2FA）**的站点无法自动登录，只能在 Cookie 过期后重新录制
+- 登录页结构变化过大（字段改名、改成多步登录）时自动登录可能失败，重新录制即可
+- 单点登录 / 第三方 OAuth 登录（跳转到别的域名）只做最大努力
 
 ## 配置与环境变量
 
@@ -152,6 +194,7 @@ docker compose down                   # 停止（数据卷保留）
 | `CHECKIN_USER` | `admin` | Web UI 登录用户名 |
 | `CHECKIN_PASSWORD` | `changeme` | Web UI 登录密码，**务必修改** |
 | `CHECKIN_SESSION_SECRET` | compose：`please-change-this-session-secret` | 会话 Cookie 签名密钥，请换成随机长字符串 |
+| `CHECKIN_SECRET_KEY` | 未设置时自动生成 `/data/secret.key` | 加密已保存登录密码的密钥（Fernet key 或任意长字符串），**请备份** |
 | `CHECKIN_DATA_DIR` | `/data`（Docker），本地默认 `./data` | SQLite 数据目录 |
 | `TZ` | `Asia/Shanghai` | 容器时区（定时任务固定按 Asia/Shanghai） |
 | `CHECKIN_DISPLAY` | `:99` | 录制用 Xvfb 显示号 |
@@ -188,7 +231,10 @@ docker compose down                   # 停止（数据卷保留）
 | 页面样式错乱 | 强制刷新（Ctrl+F5）；样式文件带版本号，升级后会自动失效 |
 | 签到失败「Name or service not known」 | 容器无法解析该域名，检查 DNS / 网络 |
 | 一直「今日已签」 | 说明站点判定今天已签过，属于正常的幂等成功 |
-| 录制回放失败 | Cookie 可能已过期，重新录制该站点 |
+| 录制回放失败 / 登录已过期 | 录制时包含登录步骤即可自动重新登录；未保存凭据或需要验证码的站点请重新录制 |
+| 「无法解密已保存的登录凭据」 | 加密密钥已更换或丢失（`CHECKIN_SECRET_KEY` / `secret.key`），恢复原密钥或重新录制 |
+| 「自动重新登录失败：…验证码…」 | 站点需要验证码 / 短信 / 二次验证，无法自动登录，请重新录制 |
+| 已登录却被判定为「登录已过期」 | 在站点设置中填写「登录状态检查」，例如 `退出登录` 或 `css:.avatar` |
 | Chromium 崩溃 | 确认 compose 中 `shm_size: 256mb` 未被删除 |
 | 定时没有执行 | 确认站点已启用，在总览页查看「下次运行」时间；容器需保持运行 |
 
@@ -206,16 +252,20 @@ daily-checkin/
 │   │   ├── record_routes.py # 录制页面、/ws/vnc WebSocket 桥接、诊断接口
 │   │   ├── templates/       # Jinja2 模板（base / 总览 / 表单 / 日志 / 设置 / 录制）
 │   │   └── static/style.css # 设计系统（浅色 / 深色，无外部依赖）
-│   ├── adapters/            # forum / portal / http_form / recorded
+│   ├── adapters/            # forum / portal / http_form / recorded（回放 + 自动重新登录）
 │   ├── browser/recorder.py  # Xvfb + x11vnc + Playwright 录制会话
+│   ├── browser/flow.py      # 登录识别、回放计划、登录过期检测、CSRF 获取
+│   ├── crypto.py            # Fernet 加密（CHECKIN_SECRET_KEY / secret.key）
+│   ├── redact.py            # 请求 / URL / 日志脱敏
 │   ├── db.py                # SQLite 持久化
 │   ├── scheduler.py         # APScheduler（Asia/Shanghai）
 │   ├── core.py              # 签到编排
 │   └── models.py            # 数据模型、签到方式 / 类型标签
 ├── examples/
-│   ├── test-site/           # Flask 自测签到站（demo / demo）
+│   ├── test-site/           # Flask 自测签到站（demo / demo，登录 CSRF，/admin/expire）
 │   ├── e2e_against_test_site.py
-│   └── e2e_record_ui.py     # noVNC 录制 UI 端到端测试
+│   ├── e2e_record_ui.py     # noVNC 录制 UI 端到端测试
+│   └── e2e_relogin.py       # 录制 → 会话过期 → 自动重新登录 → 签到
 ├── docs/
 │   ├── screenshots/         # README 截图
 │   └── capture_screenshots.py
@@ -254,6 +304,17 @@ docker run --rm --network host --shm-size 256m -v "$PWD/examples:/ex" \
   daily-checkin-checkin python /ex/e2e_record_ui.py
 ```
 
+登录过期自动重新登录（录制 alice 账号 → `POST /admin/expire` 让示例站会话失效 → 回放必须自动登录并签到），之后检查数据卷和日志中没有明文密码：
+
+```bash
+docker run --rm --network host --shm-size 256m -v "$PWD/examples:/ex" \
+  -e UI_URL=http://127.0.0.1:4567 -e TARGET_URL=http://host.docker.internal:5001 \
+  -e TEST_SITE_LOCAL=http://127.0.0.1:5001 daily-checkin-checkin python /ex/e2e_relogin.py
+docker exec daily-checkin grep -rlF 'Wonderland-2026!' /data || echo "no plaintext"
+```
+
+示例站：登录表单带 CSRF Token；`POST /admin/expire` 让所有会话失效；`SESSION_LIFETIME=秒` 可设置会话有效期；`/login?prefill=alice` 预填第二个账号。
+
 重新生成截图见 [`docs/capture_screenshots.py`](docs/capture_screenshots.py) 顶部说明（建议使用全新数据卷的演示容器）。
 
 前端说明：服务端渲染（FastAPI + Jinja2），没有 npm / 构建步骤；样式在 `static/style.css`，图标是 `_macros.html` 中的内联 SVG。
@@ -265,6 +326,8 @@ CLI 模式（YAML 配置，适合调试）：`cp config.example.yaml config.yaml
 - **修改默认密码**：`admin / changeme` 仅供首次试用；同时设置随机的 `CHECKIN_SESSION_SECRET`
 - **不要直接暴露到公网**：建议只在局域网使用；如需外网访问，请放在 HTTPS 反向代理 / VPN 之后
 - **Cookie 等同于账号**：站点 Cookie、录制的 `storage_state` 存在 `/data` 数据卷，切勿提交或分享数据卷 / `checkin.db`
+- **登录密码加密保存**：只有密码类字段被加密，密钥来自 `CHECKIN_SECRET_KEY` 或 `/data/secret.key`（0600）。拿到数据库 + 密钥的人可以解密，所以两者请分开保管、做好备份
+- **脱敏**：录制的其他请求、URL 参数、运行日志、应用日志中的敏感字段都会替换为 `***`
 - **切勿提交**：`.env`、`config.yaml`、数据库文件、导出的 Cookie（已在 `.gitignore` 中排除）
 - **不使用 GitHub Actions**：本项目设计为自托管运行，不要把签到放到 CI 中
 - noVNC 和 `/ws/vnc` 同样需要登录；x11vnc 只监听容器内回环地址

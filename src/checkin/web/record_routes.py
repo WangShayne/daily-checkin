@@ -154,6 +154,16 @@ def register_record_routes(
             storage_state=payload.get("storage_state") or {},
             steps=payload.get("steps") or [],
         )
+        login = payload.pop("login", None)
+        if login and login.get("passwords"):
+            # Password is encrypted inside save_login_credential (never stored in clear)
+            db.save_login_credential(
+                site_id,
+                username=login.get("username") or "",
+                passwords=login["passwords"],
+                login_step=login.get("meta") or {},
+            )
+            login["passwords"] = {}
         site = db.get_site(site_id)
         if site:
             site.mode = CheckInMode.RECORDED.value
@@ -167,7 +177,10 @@ def register_record_routes(
         from checkin.scheduler import reload_jobs
 
         reload_jobs()
-        msg = quote("录制已保存，该站点将按计划自动回放")
+        text = "录制已保存，该站点将按计划自动回放"
+        if login:
+            text += "；已识别登录步骤并加密保存凭据，登录过期时将自动重新登录"
+        msg = quote(text)
         return RedirectResponse(
             f"/record?ok=1&site_id={site_id}&msg={msg}", status_code=303
         )

@@ -8,6 +8,7 @@ Or from host with TEST_SITE_URL / CHECKIN_DATA_DIR set.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -27,11 +28,16 @@ TEST_SITE = os.environ.get(
 DATA_DIR = os.environ.get("CHECKIN_DATA_DIR", "/data")
 
 
+ALICE_PASSWORD = "Wonderland-2026!"  # must never appear in /data or logs
+
+
 def login_cookie() -> str:
     s = requests.Session()
+    page = s.get(f"{TEST_SITE}/login", timeout=15)
+    m = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
     r = s.post(
         f"{TEST_SITE}/login",
-        data={"username": "demo", "password": "demo"},
+        data={"username": "demo", "password": "demo", "csrf_token": m.group(1) if m else ""},
         allow_redirects=True,
         timeout=15,
     )
@@ -88,26 +94,34 @@ def test_click(db: Database, cookie: str) -> None:
 
 
 def test_recorded(db: Database) -> None:
-    """Record via Playwright API (no noVNC), save flow, replay."""
+    """Record login + check-in like the real recorder, then replay, expire, re-login."""
     from playwright.sync_api import sync_playwright
+
+    from checkin.browser.flow import finalize_recording
+    from checkin.browser.recorder import FORM_HOOK_JS
 
     site = SiteConfig(
         name="E2E-Recorded",
         type="browser",
         mode=CheckInMode.RECORDED.value,
         base_url=TEST_SITE,
-        checkin_path="/login",
+        checkin_path="/login?prefill=alice",
         method="GET",
     )
     sid = db.add_site(site)
     site.id = sid
 
     steps: list[dict] = []
+    submits: list[dict] = []
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
         context = browser.new_context(ignore_https_errors=True)
+        context.expose_binding(
+            "__checkinFormSubmit", lambda _src, info: submits.append({**info, "t": time.monotonic()})
+        )
+        context.add_init_script(FORM_HOOK_JS)
         page = context.new_page()
 
         def on_nav(frame):
@@ -116,31 +130,26 @@ def test_recorded(db: Database) -> None:
 
         def on_req(request):
             if request.method in ("POST", "PUT") and request.resource_type in (
-                "document",
-                "xhr",
-                "fetch",
-                "other",
+                "document", "xhr", "fetch", "other",
             ):
-                post = request.post_data
-                if post and len(post) > 2000:
-                    post = post[:2000]
                 steps.append(
                     {
                         "kind": "request",
                         "method": request.method,
                         "url": request.url,
-                        "post_data": post,
-                        "ts": time.time(),
+                        "resource_type": request.resource_type,
+                        "content_type": request.headers.get("content-type", ""),
+                        "page_url": request.frame.url,
+                        "_raw": request.post_data,
+                        "t": time.monotonic(),
                     }
                 )
 
         page.on("framenavigated", on_nav)
         page.on("request", on_req)
 
-        page.goto(f"{TEST_SITE}/login", wait_until="domcontentloaded")
-        page.fill('input[name="username"]', "demo")
-        page.fill('input[name="password"]', "demo")
-        page.click('button[type="submit"]')
+        page.goto(f"{TEST_SITE}/login?prefill=alice", wait_until="domcontentloaded")
+        page.click('button[type="submit"]')  # login (alice, prefilled) + CSRF token
         page.wait_for_url("**/dashboard**", timeout=15000)
         page.click('button[type="submit"]')  # 签到
         page.wait_for_selector("text=签到成功", timeout=15000)
@@ -149,20 +158,61 @@ def test_recorded(db: Database) -> None:
         final_url = page.url
         browser.close()
 
-    db.save_recorded_flow(
-        sid,
-        final_url=final_url,
-        cookies=cookies,
-        storage_state=storage,
-        steps=steps,
-    )
-    cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-    site.cookies = cookie_header
-    db.update_site(sid, site)
+    clean_steps, login = finalize_recording(steps, submits)
+    assert login, "login step not detected"
+    assert login["meta"]["password_fields"] == ["password"], login["meta"]
+    assert login["meta"]["username_field"] == "username"
+    assert "csrf_token" in login["meta"]["csrf_fields"]
+    print(f"[recorded] login detected: url={login['meta']['url']} fields={login['meta']['fields']}")
+    db.save_recorded_flow(sid, final_url=final_url, cookies=cookies, storage_state=storage,
+                          steps=clean_steps)
+    db.save_login_credential(sid, username=login["username"], passwords=login["passwords"],
+                             login_step=login["meta"])
 
-    # Replay
-    result = get_adapter_for_site(site).check_in(site, timeout=30)
+    adapter = get_adapter_for_site(site)
+    # 1) session still valid → no re-login
+    result = adapter.check_in(site, timeout=30)
     assert_ok(result, "recorded-replay")
+    assert "重新登录" not in result.message, result.message
+
+    # 2) expire the session server-side → must auto re-login (fresh CSRF) and check in
+    requests.post(f"{TEST_SITE}/admin/expire", timeout=10).raise_for_status()
+    result = adapter.check_in(site, timeout=30)
+    assert_ok(result, "recorded-expired-relogin")
+    assert "已自动重新登录" in result.message, result.message
+    cred = db.get_login_credential(sid)
+    assert cred and cred["last_relogin_ok"] is True, cred
+
+    # 3) refreshed storage_state was saved → next run needs no re-login
+    result = adapter.check_in(site, timeout=30)
+    assert_ok(result, "recorded-after-relogin")
+    assert "重新登录" not in result.message, result.message
+
+    # 4) wrong saved password → clear failure suggesting re-record
+    db.save_login_credential(sid, username="alice", passwords={"password": "wrong-pass"},
+                             login_step=login["meta"])
+    requests.post(f"{TEST_SITE}/admin/expire", timeout=10).raise_for_status()
+    result = adapter.check_in(site, timeout=30)
+    print(f"[recorded-bad-password] {result.status.value}: {result.message}")
+    assert result.status == CheckInStatus.FAILED and "重新录制" in result.message, result.message
+    db.save_login_credential(sid, username=login["username"], passwords=login["passwords"],
+                             login_step=login["meta"])
+
+    # 5) no plaintext password anywhere in the data dir
+    check_no_plaintext()
+
+
+def check_no_plaintext() -> None:
+    leaks = []
+    for f in Path(DATA_DIR).rglob("*"):
+        if f.is_file():
+            data = f.read_bytes()
+            if ALICE_PASSWORD.encode() in data:
+                leaks.append(str(f))
+            if re.search(rb"password[\"']?\s*[=:]\s*[\"']?demo\b", data):
+                leaks.append(f"{f} (password=demo)")
+    assert not leaks, f"plaintext password found in: {leaks}"
+    print(f"[plaintext-check] {ALICE_PASSWORD!r} / password=demo not found under {DATA_DIR}")
 
 
 def test_ui_login() -> None:

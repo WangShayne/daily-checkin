@@ -77,6 +77,47 @@
     </div>
   </div>
 
+  <div class="card" id="recorded-card" {% if mode != 'recorded' %}hidden{% endif %}>
+    <div class="card-head"><div><h2>录制回放与自动登录</h2><p>登录过期时用加密保存的凭据自动重新登录</p></div>{{ icon('key') }}</div>
+    <div class="card-body">
+      {% if site %}
+      <dl class="kv" style="margin-bottom:16px">
+        <dt>录制流程</dt>
+        <dd>{% if flow %}已录制 {{ flow.step_count }} 步 · 更新于 {{ flow.updated_at[:16]|replace('T', ' ') }}{% else %}<span class="subtle">尚未录制</span>{% endif %}</dd>
+        <dt>登录凭据</dt>
+        <dd id="cred-status">
+          {% if cred %}
+            <span class="badge badge-success">{{ icon('lock', 'sm') }}已保存登录凭据（已加密）</span>
+            <div class="t-sub" style="margin-top:6px">账号 <span class="mono">{{ cred.username_masked or '（未识别）' }}</span> · 登录页 <span class="mono">{{ cred.login_url }}</span></div>
+            <div class="t-sub">字段 <span class="mono">{{ cred.fields }}</span> · 保存于 {{ cred.updated_at }}</div>
+          {% else %}
+            <span class="badge badge-neutral">未保存</span>
+            <div class="t-sub" style="margin-top:6px">在「浏览器录制」中完成一次<strong>登录 + 签到</strong>，系统会识别登录步骤并加密保存密码。</div>
+          {% endif %}
+        </dd>
+        <dt>最近自动登录</dt>
+        <dd>
+          {% if cred and cred.last_relogin_at %}
+            {% if cred.last_relogin_ok %}<span class="badge badge-success">成功</span>{% else %}<span class="badge badge-failed">失败</span>{% endif %}
+            <span class="t-sub">{{ cred.last_relogin_at }}{% if cred.last_relogin_message and not cred.last_relogin_ok %} · {{ cred.last_relogin_message }}{% endif %}</span>
+          {% else %}<span class="subtle">从未触发</span>{% endif %}
+        </dd>
+      </dl>
+      {% if cred %}
+      <div style="margin-bottom:16px">
+        <button class="btn btn-sm btn-danger" type="submit" form="clear-cred-form">{{ icon('trash', 'sm') }}清除登录凭据</button>
+        <a class="btn btn-sm" href="/record?site_id={{ site.id }}">{{ icon('video', 'sm') }}重新录制</a>
+      </div>
+      {% endif %}
+      {% endif %}
+      <div class="field" style="margin-bottom:0">
+        <label for="f-login-check">登录状态检查（可选）</label>
+        <input class="input" id="f-login-check" name="login_check" value="{{ site.login_check if site else '' }}" placeholder="例如：退出登录   或   css:.user-avatar">
+        <span class="hint">已登录页面上一定会出现的文字，或 <code>css:</code> 开头的选择器。不填时自动判断：跳转到登录页、出现密码输入框、HTTP 401/403 即视为登录已过期。验证码 / 短信 / 二次验证无法自动登录。</span>
+      </div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="card-head"><div><h2>定时计划</h2><p>时区 Asia/Shanghai</p></div></div>
     <div class="card-body">
@@ -151,6 +192,10 @@
     <button class="btn btn-primary" type="submit">{{ icon('check', 'sm') }}{{ '保存修改' if site else '创建站点' }}</button>
   </div>
 </form>
+{% if site %}
+<form id="clear-cred-form" method="post" action="/sites/{{ site.id }}/credentials/clear"
+      onsubmit="return confirm('清除已加密保存的登录凭据？之后登录过期需要重新录制。');"></form>
+{% endif %}
 </div>
 {% endblock %}
 {% block scripts %}
@@ -163,6 +208,7 @@
       document.getElementById('field-cron').style.opacity = st === 'cron' ? 1 : 0.45;
       var mode = f.querySelector('input[name="mode"]:checked').value;
       document.getElementById('recorded-hint').hidden = mode !== 'recorded';
+      document.getElementById('recorded-card').hidden = mode !== 'recorded';
     }
     f.addEventListener('change', sync);
     sync();

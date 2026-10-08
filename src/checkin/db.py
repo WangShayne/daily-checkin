@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
 from checkin.models import CheckInResult, CheckInStatus, SiteConfig
+from checkin.redact import redact_steps, redact_text
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -34,6 +36,8 @@ class Database:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # Overwrite freed pages so redacted / deleted secrets don't linger in the file
+        conn.execute("PRAGMA secure_delete = ON")
         try:
             yield conn
             conn.commit()
@@ -101,8 +105,25 @@ class Database:
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
                 );
+
+                -- Saved login for automatic re-login (password encrypted, Fernet)
+                CREATE TABLE IF NOT EXISTS login_credentials (
+                    site_id INTEGER PRIMARY KEY,
+                    username TEXT NOT NULL DEFAULT '',
+                    secret_enc TEXT NOT NULL,
+                    login_step_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_relogin_at TEXT,
+                    last_relogin_ok INTEGER,
+                    last_relogin_message TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
+                );
                 """
             )
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(sites)").fetchall()}
+            if "login_check" not in cols:
+                conn.execute("ALTER TABLE sites ADD COLUMN login_check TEXT NOT NULL DEFAULT ''")
             # Default settings
             defaults = {
                 "timeout": "30",
@@ -191,6 +212,7 @@ class Database:
             schedule_type=row["schedule_type"],
             daily_time=row["daily_time"],
             cron=row["cron"],
+            login_check=row["login_check"] if "login_check" in row.keys() else "",
         )
 
     def list_sites(self) -> list[SiteConfig]:
@@ -216,8 +238,8 @@ class Database:
                     name, type, mode, enabled, base_url, checkin_path, method,
                     headers_json, cookies, form_data_json, body_json,
                     success_keywords_json, success_status_json,
-                    schedule_type, daily_time, cron, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    schedule_type, daily_time, cron, login_check, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     site.name,
@@ -242,6 +264,7 @@ class Database:
                     site.schedule_type or "daily",
                     site.daily_time or "09:00",
                     site.cron or "0 9 * * *",
+                    (site.login_check or "").strip(),
                     now,
                     now,
                 ),
@@ -257,7 +280,7 @@ class Database:
                     name=?, type=?, mode=?, enabled=?, base_url=?, checkin_path=?,
                     method=?, headers_json=?, cookies=?, form_data_json=?,
                     body_json=?, success_keywords_json=?, success_status_json=?,
-                    schedule_type=?, daily_time=?, cron=?, updated_at=?
+                    schedule_type=?, daily_time=?, cron=?, login_check=?, updated_at=?
                 WHERE id=?
                 """,
                 (
@@ -283,6 +306,7 @@ class Database:
                     site.schedule_type or "daily",
                     site.daily_time or "09:00",
                     site.cron or "0 9 * * *",
+                    (site.login_check or "").strip(),
                     now,
                     site_id,
                 ),
@@ -312,7 +336,7 @@ class Database:
                     result.site_id,
                     result.site_name,
                     result.status.value,
-                    result.message,
+                    redact_text(result.message) or "",
                     result.http_status,
                     result.mode,
                     triggered_by,
@@ -393,7 +417,8 @@ class Database:
         now = _now_iso()
         cookies_json = json.dumps(cookies, ensure_ascii=False)
         storage_json = json.dumps(storage_state or {}, ensure_ascii=False)
-        steps_json = json.dumps(steps or [], ensure_ascii=False)
+        # Defensive: never persist plaintext secrets in steps, whatever the caller
+        steps_json = json.dumps(redact_steps(steps or []), ensure_ascii=False)
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT id FROM recorded_flows WHERE site_id = ?", (site_id,)
@@ -448,6 +473,162 @@ class Database:
     def delete_recorded_flow(self, site_id: int) -> None:
         with self.connect() as conn:
             conn.execute("DELETE FROM recorded_flows WHERE site_id = ?", (site_id,))
+
+    def update_flow_storage(
+        self, site_id: int, *, storage_state: dict, cookies: list | None = None
+    ) -> None:
+        """Persist refreshed cookies / localStorage after an automatic re-login."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE recorded_flows SET storage_state_json=?, cookies_json=?, updated_at=? "
+                "WHERE site_id=?",
+                (
+                    json.dumps(storage_state or {}, ensure_ascii=False),
+                    json.dumps(cookies if cookies is not None else (storage_state or {}).get("cookies", []),
+                               ensure_ascii=False),
+                    _now_iso(),
+                    site_id,
+                ),
+            )
+
+    # --- saved login credentials (password encrypted) ---
+
+    def save_login_credential(
+        self,
+        site_id: int,
+        *,
+        username: str,
+        passwords: dict[str, str],
+        login_step: dict[str, Any],
+    ) -> None:
+        from checkin.crypto import encrypt_json
+
+        secret_enc = encrypt_json({"passwords": passwords}, self.data_dir)
+        now = _now_iso()
+        step = {k: v for k, v in (login_step or {}).items() if k != "_raw"}
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO login_credentials (
+                    site_id, username, secret_enc, login_step_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(site_id) DO UPDATE SET
+                    username=excluded.username, secret_enc=excluded.secret_enc,
+                    login_step_json=excluded.login_step_json, updated_at=excluded.updated_at,
+                    last_relogin_at=NULL, last_relogin_ok=NULL, last_relogin_message=''
+                """,
+                (site_id, username or "", secret_enc,
+                 json.dumps(redact_steps([step])[0], ensure_ascii=False), now, now),
+            )
+
+    def get_login_credential(self, site_id: int) -> dict[str, Any] | None:
+        """Metadata only (no plaintext). Use :meth:`decrypt_login_passwords` to unlock."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM login_credentials WHERE site_id = ?", (site_id,)
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "site_id": row["site_id"],
+            "username": row["username"],
+            "login_step": json.loads(row["login_step_json"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "last_relogin_at": row["last_relogin_at"],
+            "last_relogin_ok": None if row["last_relogin_ok"] is None else bool(row["last_relogin_ok"]),
+            "last_relogin_message": row["last_relogin_message"] or "",
+        }
+
+    def decrypt_login_passwords(self, site_id: int) -> dict[str, str]:
+        from checkin.crypto import decrypt_json
+
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT secret_enc FROM login_credentials WHERE site_id = ?", (site_id,)
+            ).fetchone()
+        if not row:
+            return {}
+        data = decrypt_json(row["secret_enc"], self.data_dir)
+        return dict(data.get("passwords") or {})
+
+    def delete_login_credential(self, site_id: int) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute("DELETE FROM login_credentials WHERE site_id = ?", (site_id,))
+            return cur.rowcount > 0
+
+    def mark_relogin(self, site_id: int, ok: bool, message: str = "") -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE login_credentials SET last_relogin_at=?, last_relogin_ok=?, "
+                "last_relogin_message=? WHERE site_id=?",
+                (_now_iso(), 1 if ok else 0, redact_text(message) or "", site_id),
+            )
+
+    def credential_site_ids(self) -> set[int]:
+        with self.connect() as conn:
+            rows = conn.execute("SELECT site_id FROM login_credentials").fetchall()
+        return {int(r["site_id"]) for r in rows}
+
+    # --- one-time migration: redact legacy plaintext recordings ---
+
+    def migrate_recorded_secrets(self) -> dict[str, int]:
+        """Redact plaintext secrets in flows recorded before v0.5 (idempotent).
+
+        A login POST found in old steps has its password encrypted into
+        ``login_credentials`` (unless a credential already exists).
+        """
+        from checkin.browser.flow import upgrade_legacy_steps
+
+        stats = {"flows": 0, "changed": 0, "logins": 0}
+        if self.get_setting("secrets_migration") == "v1":
+            return stats
+        with self.connect() as conn:
+            rows = conn.execute("SELECT site_id, steps_json FROM recorded_flows").fetchall()
+        existing = self.credential_site_ids()
+        failed = 0
+        for r in rows:
+            stats["flows"] += 1
+            site_id = int(r["site_id"])
+            old_json = r["steps_json"] or "[]"
+            try:
+                steps = json.loads(old_json)
+                new_steps, login = upgrade_legacy_steps(steps)
+                if login and site_id not in existing:
+                    self.save_login_credential(
+                        site_id,
+                        username=login.get("username", ""),
+                        passwords=login["passwords"],
+                        login_step=login["meta"],
+                    )
+                    stats["logins"] += 1
+                new_json = json.dumps(redact_steps(new_steps), ensure_ascii=False)
+            except Exception:  # noqa: BLE001 - keep migrating the others
+                logging.getLogger(__name__).exception("迁移录制流程失败 site_id=%s", site_id)
+                failed += 1
+                continue
+            if new_json != old_json:
+                stats["changed"] += 1
+                with self.connect() as conn:
+                    conn.execute(
+                        "UPDATE recorded_flows SET steps_json=? WHERE site_id=?",
+                        (new_json, site_id),
+                    )
+        with self.connect() as conn:
+            for lr in conn.execute("SELECT id, message FROM run_logs").fetchall():
+                red = redact_text(lr["message"] or "")
+                if red != (lr["message"] or ""):
+                    conn.execute("UPDATE run_logs SET message=? WHERE id=?", (red, lr["id"]))
+        if not failed:  # retry failed flows on next start
+            self.set_setting("secrets_migration", "v1")
+        if stats["changed"] or stats["logins"]:
+            # Rewrite the file so old plaintext pages are gone, not just unlinked
+            conn2 = sqlite3.connect(self.path)
+            try:
+                conn2.execute("VACUUM")
+            finally:
+                conn2.close()
+        return stats
 
     def list_flow_summaries(self) -> dict[int, dict[str, Any]]:
         with self.connect() as conn:

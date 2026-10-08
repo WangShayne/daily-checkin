@@ -56,6 +56,8 @@ class SiteConfig:
     schedule_type: str = "daily"
     daily_time: str = "09:00"
     cron: str = "0 9 * * *"
+    # recorded mode: optional logged-in indicator (text, or "css:<selector>")
+    login_check: str = ""
     id: int | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -85,6 +87,7 @@ class SiteConfig:
             "schedule_type",
             "daily_time",
             "cron",
+            "login_check",
             "id",
         }
         kwargs = {k: data[k] for k in known if k in data}
@@ -121,6 +124,7 @@ class SiteConfig:
             "schedule_type": self.schedule_type,
             "daily_time": self.daily_time,
             "cron": self.cron,
+            "login_check": self.login_check,
             **self.extra,
         }
 

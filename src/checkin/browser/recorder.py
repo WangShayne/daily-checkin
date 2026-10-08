@@ -20,6 +20,8 @@ from typing import Any
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
+from checkin.browser.flow import finalize_recording, norm_url
+
 logger = logging.getLogger(__name__)
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -27,6 +29,34 @@ DISPLAY = os.environ.get("CHECKIN_DISPLAY", ":99")
 VNC_PORT = int(os.environ.get("CHECKIN_VNC_PORT", "5900"))
 VNC_READY_TIMEOUT = float(os.environ.get("CHECKIN_VNC_READY_TIMEOUT", "15"))
 XVFB_PID_FILE = Path(os.environ.get("CHECKIN_XVFB_PID_FILE", "/tmp/checkin-xvfb.pid"))
+
+
+# Reports form submits (field names / types, never values) to Python so the
+# login form can be recognised even when the password field has an odd name.
+FORM_HOOK_JS = r"""
+(() => {
+  if (window.__checkinHooked) return;
+  window.__checkinHooked = true;
+  document.addEventListener('submit', (ev) => {
+    try {
+      const f = ev.target;
+      if (!f || f.tagName !== 'FORM') return;
+      const fields = Array.from(f.elements)
+        .filter((e) => e.name)
+        .map((e) => ({ name: e.name, type: String(e.type || '').toLowerCase() }));
+      const attr = f.getAttribute('action');
+      const info = {
+        page_url: location.href,
+        action: new URL(attr || location.href, location.href).href,
+        method: String(f.getAttribute('method') || 'get').toLowerCase(),
+        fields,
+        has_password: fields.some((x) => x.type === 'password'),
+      };
+      if (window.__checkinFormSubmit) window.__checkinFormSubmit(info);
+    } catch (e) { /* ignore */ }
+  }, true);
+})();
+"""
 
 
 def _now() -> str:
@@ -39,6 +69,8 @@ class ActiveSession:
     start_url: str
     vnc_password: str
     steps: list[dict[str, Any]] = field(default_factory=list)
+    # form submit metadata from the page (field names/types only, never values)
+    submits: list[dict[str, Any]] = field(default_factory=list)
     started_at: str = field(default_factory=_now)
     status: str = "starting"  # starting | ready | stopping | error
     error: str = ""
@@ -384,6 +416,18 @@ class RecordingManager:
             ignore_https_errors=True,
         )
         session.context = context
+        def on_submit(_source: Any, info: Any) -> None:
+            if isinstance(info, dict):
+                info = {k: info.get(k) for k in ("page_url", "action", "method", "fields", "has_password")}
+                info["t"] = time.monotonic()
+                with session._lock:
+                    session.submits.append(info)
+
+        try:
+            context.expose_binding("__checkinFormSubmit", on_submit)
+            context.add_init_script(FORM_HOOK_JS)
+        except Exception:  # noqa: BLE001
+            logger.warning("无法注入表单提交钩子，登录识别将仅依据请求字段", exc_info=True)
         page = context.new_page()
         session.page = page
 
@@ -394,8 +438,19 @@ class RecordingManager:
             if not url or url.startswith("about:"):
                 return
             session.current_url = url
+            step: dict[str, Any] = {"kind": "navigate", "url": url, "ts": _now()}
             with session._lock:
-                session.steps.append({"kind": "navigate", "url": url, "ts": _now()})
+                # A navigation that is the response of a form POST can't be re-opened via GET
+                for prev in reversed(session.steps[-4:]):
+                    if prev.get("kind") == "request":
+                        if (
+                            prev.get("resource_type") == "document"
+                            and norm_url(prev.get("url")) == norm_url(url)
+                            and time.monotonic() - float(prev.get("t", 0)) < 30
+                        ):
+                            step["via_post"] = True
+                        break
+                session.steps.append(step)
 
         def on_request(request: Any) -> None:
             try:
@@ -403,9 +458,10 @@ class RecordingManager:
                     return
                 if request.resource_type not in ("document", "xhr", "fetch", "other"):
                     return
-                post = request.post_data
-                if post and len(post) > 2000:
-                    post = post[:2000] + "…"
+                try:
+                    page_url = request.frame.url
+                except Exception:  # noqa: BLE001
+                    page_url = request.headers.get("referer", "")
                 with session._lock:
                     session.steps.append(
                         {
@@ -413,7 +469,12 @@ class RecordingManager:
                             "method": request.method,
                             "url": request.url,
                             "resource_type": request.resource_type,
-                            "post_data": post,
+                            "content_type": request.headers.get("content-type", ""),
+                            "page_url": page_url,
+                            # Raw body lives in memory only for this session; it is
+                            # classified + redacted in _collect() before anything is saved.
+                            "_raw": request.post_data,
+                            "t": time.monotonic(),
                             "ts": _now(),
                         }
                     )
@@ -439,7 +500,16 @@ class RecordingManager:
             cookies = session.context.cookies()
             storage_state = session.context.storage_state()
         with session._lock:
-            steps = list(session.steps)
+            raw_steps = list(session.steps)
+            submits = list(session.submits)
+            session.steps.clear()
+        steps, login = finalize_recording(raw_steps, submits)
+        if login:
+            logger.info(
+                "已识别登录步骤 %s（字段 %s），密码将加密保存",
+                login["meta"].get("url"),
+                ", ".join(login["meta"].get("fields") or []),
+            )
         cleaned: list[dict[str, Any]] = []
         for step in steps:
             if (
@@ -460,6 +530,9 @@ class RecordingManager:
             "cookie_header": cookie_header,
             "storage_state": storage_state,
             "steps": cleaned,
+            # {"meta", "username", "passwords"} — passwords are encrypted by
+            # Database.save_login_credential() and never written in clear.
+            "login": login,
         }
 
     def finish(self) -> dict[str, Any]:

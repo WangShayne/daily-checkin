@@ -34,7 +34,10 @@ W, H = 1440, 900
 
 def test_site_cookie(checked_in: bool = False) -> str:
     s = requests.Session()
-    s.post(f"{TEST_SITE_LOCAL}/login", data={"username": "demo", "password": "demo"}, timeout=10)
+    page = s.get(f"{TEST_SITE_LOCAL}/login", timeout=10).text
+    m = re.search(r'name="csrf_token" value="([^"]+)"', page)
+    s.post(f"{TEST_SITE_LOCAL}/login", timeout=10,
+           data={"username": "demo", "password": "demo", "csrf_token": m.group(1) if m else ""})
     if checked_in:
         s.post(f"{TEST_SITE_LOCAL}/checkin", timeout=10)
     return "; ".join(f"{c.name}={c.value}" for c in s.cookies)

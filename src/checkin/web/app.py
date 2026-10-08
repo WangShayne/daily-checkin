@@ -134,6 +134,7 @@ def _site_from_form(
     schedule_type: str,
     daily_time: str,
     cron: str,
+    login_check: str = "",
 ) -> SiteConfig:
     mode_norm = mode.strip().lower()
     if mode_norm in ("visit", "visit-only", "visit_only"):
@@ -172,7 +173,33 @@ def _site_from_form(
         schedule_type=schedule_type if schedule_type in ("daily", "cron") else "daily",
         daily_time=(daily_time or "09:00").strip(),
         cron=(cron or "0 9 * * *").strip(),
+        login_check=(login_check or "").strip()[:200],
     )
+
+
+def _mask(value: str) -> str:
+    v = value or ""
+    if len(v) <= 2:
+        return "*" * len(v)
+    if len(v) <= 4:
+        return v[0] + "*" * (len(v) - 2) + v[-1]
+    return v[:2] + "*" * min(len(v) - 3, 6) + v[-1]
+
+
+def _cred_view(cred: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Display-safe credential summary (no password, masked username)."""
+    if not cred:
+        return None
+    step = cred.get("login_step") or {}
+    return {
+        "username_masked": _mask(cred.get("username") or ""),
+        "login_url": step.get("page_url") or step.get("url") or "",
+        "fields": ", ".join(step.get("fields") or []),
+        "updated_at": (cred.get("updated_at") or "")[:16].replace("T", " "),
+        "last_relogin_at": (cred.get("last_relogin_at") or "")[:16].replace("T", " "),
+        "last_relogin_ok": cred.get("last_relogin_ok"),
+        "last_relogin_message": cred.get("last_relogin_message") or "",
+    }
 
 
 def flash(request: Request, message: str, kind: str = "success") -> None:
@@ -211,6 +238,21 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    from checkin.crypto import get_fernet, key_source
+    from checkin.redact import install_log_redaction
+
+    install_log_redaction()
+    get_fernet(data_dir)  # create /data/secret.key on first start (warns once)
+    logger.info("登录凭据加密密钥来源：%s", key_source(data_dir))
+    try:
+        stats = get_db().migrate_recorded_secrets()
+        if stats.get("changed") or stats.get("logins"):
+            logger.info(
+                "已迁移旧录制数据：脱敏 %s 个流程，加密保存 %s 个登录凭据",
+                stats["changed"], stats["logins"],
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("录制数据脱敏迁移失败")
     start_scheduler()
     user = _auth_username()
     if _auth_password() == DEFAULT_PASSWORD:
@@ -313,6 +355,7 @@ def create_app() -> FastAPI:
                 "sites": sites,
                 "latest": latest,
                 "flows": db.list_flow_summaries(),
+                "creds": db.credential_site_ids(),
                 "next_runs": next_run_times(),
                 "stats": stats,
                 "mode_labels": MODE_LABELS,
@@ -348,6 +391,8 @@ def create_app() -> FastAPI:
                 "type_labels": TYPE_LABELS,
                 "site_types": SITE_TYPES,
                 "title": f"编辑：{site.name}",
+                "flow": get_db().list_flow_summaries().get(site_id),
+                "cred": _cred_view(get_db().get_login_credential(site_id)),
             },
         )
 
@@ -370,6 +415,7 @@ def create_app() -> FastAPI:
         schedule_type: str = Form("daily"),
         daily_time: str = Form("09:00"),
         cron: str = Form("0 9 * * *"),
+        login_check: str = Form(""),
     ) -> RedirectResponse:
         site = _site_from_form(
             name=name,
@@ -388,6 +434,7 @@ def create_app() -> FastAPI:
             schedule_type=schedule_type,
             daily_time=daily_time,
             cron=cron,
+            login_check=login_check,
         )
         get_db().add_site(site)
         reload_jobs()
@@ -414,6 +461,7 @@ def create_app() -> FastAPI:
         schedule_type: str = Form("daily"),
         daily_time: str = Form("09:00"),
         cron: str = Form("0 9 * * *"),
+        login_check: str = Form(""),
     ) -> RedirectResponse:
         site = _site_from_form(
             name=name,
@@ -432,11 +480,20 @@ def create_app() -> FastAPI:
             schedule_type=schedule_type,
             daily_time=daily_time,
             cron=cron,
+            login_check=login_check,
         )
         get_db().update_site(site_id, site)
         reload_jobs()
         flash(request, f"已保存「{site.name}」")
         return RedirectResponse("/", status_code=303)
+
+    @app.post("/sites/{site_id}/credentials/clear")
+    async def site_clear_credentials(request: Request, site_id: int) -> RedirectResponse:
+        if get_db().delete_login_credential(site_id):
+            flash(request, "已清除保存的登录凭据；登录过期后需要重新录制", "info")
+        else:
+            flash(request, "该站点没有保存的登录凭据", "info")
+        return RedirectResponse(f"/sites/{site_id}/edit", status_code=303)
 
     @app.post("/sites/{site_id}/delete")
     async def site_delete(request: Request, site_id: int) -> RedirectResponse:

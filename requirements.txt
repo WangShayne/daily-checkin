@@ -10,3 +10,4 @@ apscheduler>=3.10
 pytest>=7.4
 itsdangerous>=2.1
 playwright>=1.48
+cryptography>=42

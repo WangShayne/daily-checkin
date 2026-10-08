@@ -84,6 +84,7 @@
           {% if site.mode == 'recorded' %}
             <div class="t-sub" style="margin-top:4px">
               {% if flow %}已录制 {{ flow.step_count }} 步{% else %}<span style="color:var(--warning)">尚未录制</span>{% endif %}
+              {% if site.id in creds %}<span title="已保存登录凭据（已加密），登录过期会自动重新登录"> · {{ icon('key', 'sm') }}自动登录</span>{% endif %}
             </div>
           {% endif %}
         </td>

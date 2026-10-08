@@ -12,6 +12,8 @@ services:
       CHECKIN_USER: ${CHECKIN_USER:-admin}
       CHECKIN_PASSWORD: ${CHECKIN_PASSWORD:-changeme}
       CHECKIN_SESSION_SECRET: ${CHECKIN_SESSION_SECRET:-please-change-this-session-secret}
+      # Encrypts saved login passwords; unset = auto-generated /data/secret.key
+      CHECKIN_SECRET_KEY: ${CHECKIN_SECRET_KEY:-}
       CHECKIN_DISPLAY: ":99"
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       # Reach published test-site port on the host (works even when ICC is flaky)
