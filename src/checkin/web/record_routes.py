@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Callable
 
 from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect
@@ -55,7 +56,12 @@ def register_record_routes(
         return tpl(
             request,
             "record.html",
-            {"sites": sites, "flows": flows, "session": mgr},
+            {
+                "sites": sites,
+                "flows": flows,
+                "session": mgr,
+                "preselect": request.query_params.get("site_id", ""),
+            },
         )
 
     @app.post("/record/start")
@@ -66,13 +72,13 @@ def register_record_routes(
         db = get_db()
         site = db.get_site(site_id)
         if site is None:
-            return RedirectResponse("/record?err=站点不存在", status_code=303)
+            return RedirectResponse(f"/record?err={quote('站点不存在')}", status_code=303)
         try:
             url = build_start_url(site.base_url, site.checkin_path or "")
             get_recording_manager().start(site_id, url)
         except Exception as exc:  # noqa: BLE001
             return RedirectResponse(
-                f"/record/session?err={exc}",
+                f"/record/session?err={quote(str(exc))}",
                 status_code=303,
             )
         return RedirectResponse("/record/session", status_code=303)
@@ -98,7 +104,7 @@ def register_record_routes(
             url = build_start_url(site.base_url, site.checkin_path or "")
             get_recording_manager().start(sid, url)
         except Exception as exc:  # noqa: BLE001
-            return RedirectResponse(f"/record?err={exc}", status_code=303)
+            return RedirectResponse(f"/record?err={quote(str(exc))}", status_code=303)
         return RedirectResponse("/record/session", status_code=303)
 
     @app.get("/record/session", response_class=HTMLResponse)
@@ -138,7 +144,7 @@ def register_record_routes(
         try:
             payload = mgr.finish()
         except Exception as exc:  # noqa: BLE001
-            return RedirectResponse(f"/record?err={exc}", status_code=303)
+            return RedirectResponse(f"/record?err={quote(str(exc))}", status_code=303)
         db = get_db()
         site_id = int(payload["site_id"])
         db.save_recorded_flow(
@@ -161,7 +167,10 @@ def register_record_routes(
         from checkin.scheduler import reload_jobs
 
         reload_jobs()
-        return RedirectResponse(f"/record?ok=1&site_id={site_id}", status_code=303)
+        msg = quote("录制已保存，该站点将按计划自动回放")
+        return RedirectResponse(
+            f"/record?ok=1&site_id={site_id}&msg={msg}", status_code=303
+        )
 
     @app.post("/record/cancel")
     def record_cancel() -> RedirectResponse:

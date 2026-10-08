@@ -321,20 +321,46 @@ class Database:
             )
             return int(cur.lastrowid)
 
-    def list_run_logs(self, limit: int = 100, site_id: int | None = None) -> list[dict[str, Any]]:
+    def list_run_logs(
+        self,
+        limit: int = 100,
+        site_id: int | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM run_logs"
+        where: list[str] = []
+        args: list[Any] = []
+        if site_id is not None:
+            where.append("site_id = ?")
+            args.append(site_id)
+        if status:
+            where.append("status = ?")
+            args.append(status)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
         with self.connect() as conn:
-            if site_id is not None:
-                rows = conn.execute(
-                    "SELECT * FROM run_logs WHERE site_id = ? "
-                    "ORDER BY id DESC LIMIT ?",
-                    (site_id, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM run_logs ORDER BY id DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+            rows = conn.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
+
+    def stats_today(self) -> dict[str, int]:
+        """Counts of today's (Asia/Shanghai) run results by status."""
+        today = datetime.now(SHANGHAI).strftime("%Y-%m-%d")
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM run_logs "
+                "WHERE created_at LIKE ? GROUP BY status",
+                (f"{today}%",),
+            ).fetchall()
+        counts = {r["status"]: int(r["n"]) for r in rows}
+        return {
+            "success": counts.get("success", 0),
+            "already": counts.get("already", 0),
+            "failed": counts.get("failed", 0),
+            "skipped": counts.get("skipped", 0),
+            "total": sum(counts.values()),
+        }
 
     def latest_result_by_site(self) -> dict[int, dict[str, Any]]:
         with self.connect() as conn:

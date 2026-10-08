@@ -1,0 +1,16 @@
+{% from "_macros.html" import icon %}
+<div class="toasts" id="toasts" aria-live="polite">
+  {% for f in flashes or [] %}
+  <div class="toast {{ f.kind }}" role="status">
+    {{ icon('check' if f.kind == 'success' else ('x-circle' if f.kind == 'error' else 'info')) }}
+    <div class="toast-msg">{{ f.message }}</div>
+    <button class="toast-x" type="button" aria-label="关闭" onclick="this.parentElement.remove()">{{ icon('x', 'sm') }}</button>
+  </div>
+  {% endfor %}
+</div>
+<script>
+  document.querySelectorAll('#toasts .toast').forEach(function (el, i) {
+    var ms = el.classList.contains('error') ? 9000 : 5000;
+    setTimeout(function () { el.classList.add('hide'); setTimeout(function () { el.remove(); }, 300); }, ms + i * 400);
+  });
+</script>

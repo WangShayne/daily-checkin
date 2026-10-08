@@ -1,73 +1,110 @@
 {% extends "base.html" %}
-{% block title %}录制会话 — 每日自动签到{% endblock %}
+{% from "_macros.html" import icon, mode_badge %}
+{% block title %}浏览器录制{% endblock %}
+{% block crumb %}浏览器录制{% endblock %}
 {% block content %}
-<section class="toolbar">
-  <h1>浏览器录制</h1>
-  <a class="btn" href="/">← 返回</a>
-</section>
-
-{% if request.query_params.get('ok') %}
-<div class="alert ok">录制已保存。该站点模式已设为「录制回放」，之后定时任务会自动回放。</div>
-{% endif %}
-{% if request.query_params.get('err') %}
-<div class="alert error">{{ request.query_params.get('err') }}</div>
-{% endif %}
+<div class="page-head">
+  <div>
+    <h1>浏览器录制</h1>
+    <p>在嵌入的远程浏览器里手动登录并签到一次，系统会保存会话与步骤，之后每天自动回放。</p>
+  </div>
+</div>
 
 {% if session.active %}
-<div class="card" style="margin-bottom:1rem">
-  <p>有进行中的录制会话（站点 #{{ session.site_id }}）。
-    <a class="btn primary" href="/record/session">继续录制画面</a>
-  </p>
+<div class="alert alert-warning">
+  {{ icon('record') }}
+  <div class="alert-body"><strong>有进行中的录制会话</strong>（站点 #{{ session.site_id }}，{{ session.status }}）。
+    <p>同一时间只能录制一个站点。<a href="/record/session">继续录制 →</a></p></div>
 </div>
 {% endif %}
 
-<div class="grid-2">
-  <section class="card">
-    <h2>选择已有站点并开始录制</h2>
-    {% if not sites %}
-    <p class="muted">还没有站点，请先在右侧快速创建，或去「添加站点」。</p>
-    {% else %}
-    <form method="post" action="/record/start" class="form">
-      <label>站点
-        <select name="site_id" required>
-          {% for site in sites %}
-          <option value="{{ site.id }}">
-            {{ site.name }} — {{ site.base_url }}
-            {% if flows.get(site.id) %}（已有录制 {{ flows[site.id].step_count }} 步）{% endif %}
-          </option>
-          {% endfor %}
-        </select>
-      </label>
-      <button class="btn primary" type="submit">🎥 开始录制会话</button>
-    </form>
-    {% endif %}
-  </section>
+<div class="grid grid-2">
+  <div class="card">
+    <div class="card-head"><div><h2>录制已有站点</h2><p>重新录制会覆盖该站点之前的录制</p></div>{{ icon('layers') }}</div>
+    <div class="card-body">
+      {% if not sites %}
+      <p class="muted">还没有站点，可以在右侧直接新建并录制。</p>
+      {% else %}
+      <form method="post" action="/record/start">
+        <div class="field">
+          <label for="r-site">选择站点</label>
+          <select class="select" id="r-site" name="site_id" required>
+            {% for site in sites %}
+            <option value="{{ site.id }}" {% if preselect and preselect|string == site.id|string %}selected{% endif %}>
+              {{ site.name }}{% if flows.get(site.id) %}（已录制 {{ flows[site.id].step_count }} 步）{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <span class="hint">起始页 = 站点的基础 URL + 路径</span>
+        </div>
+        <button class="btn btn-primary" type="submit" {% if session.active %}disabled{% endif %}>{{ icon('video', 'sm') }}开始录制</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
 
-  <section class="card">
-    <h2>快速新建并录制</h2>
-    <form method="post" action="/record/quick-site" class="form">
-      <label>名称 *
-        <input name="name" required placeholder="例如：某某论坛">
-      </label>
-      <label>基础 URL *
-        <input name="base_url" required placeholder="https://example.com">
-      </label>
-      <label>起始路径（可选）
-        <input name="checkin_path" placeholder="/ 或 /login">
-      </label>
-      <button class="btn primary" type="submit">创建并打开浏览器</button>
-    </form>
-  </section>
+  <div class="card">
+    <div class="card-head"><div><h2>新建并录制</h2><p>自动创建「浏览器录制」类型的站点</p></div>{{ icon('plus') }}</div>
+    <div class="card-body">
+      <form method="post" action="/record/quick-site">
+        <div class="field">
+          <label for="q-name">名称 *</label>
+          <input class="input" id="q-name" name="name" required placeholder="例如：某某论坛">
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label for="q-base">基础 URL *</label>
+            <input class="input" id="q-base" name="base_url" required placeholder="https://example.com">
+          </div>
+          <div class="field">
+            <label for="q-path">起始路径</label>
+            <input class="input" id="q-path" name="checkin_path" placeholder="/login">
+          </div>
+        </div>
+        <button class="btn btn-primary" type="submit" {% if session.active %}disabled{% endif %}>{{ icon('monitor', 'sm') }}创建并打开浏览器</button>
+      </form>
+    </div>
+  </div>
 </div>
 
-<section class="help-card" style="margin-top:1.25rem">
-  <h2>怎么用</h2>
-  <ol>
-    <li>选择或新建站点 → 开始录制（容器内会启动 Chromium + noVNC）。</li>
-    <li>在嵌入的远程桌面里<strong>手动登录</strong>并完成一次签到。</li>
-    <li>点击「完成录制」：保存 Cookie / 本地存储与导航、POST 步骤到数据卷。</li>
-    <li>站点模式变为「录制回放」，每日调度会无头回放该流程。</li>
-  </ol>
-  <p class="muted small">凭证仅保存在 Docker Volume（<code>/data</code>），请勿提交数据库文件。</p>
-</section>
+<div class="grid grid-2" style="margin-top:20px">
+  <div class="card">
+    <div class="card-head"><div><h2>怎么录制</h2></div>{{ icon('info') }}</div>
+    <div class="card-body">
+      <ol class="steps">
+        <li>选择或新建站点，点击 <strong>开始录制</strong>，容器内会启动 Chromium 并通过 noVNC 嵌入页面。</li>
+        <li>在远程桌面里<strong>手动登录</strong>，并完成一次签到（点签到按钮或打开签到页）。</li>
+        <li>点击 <strong>完成录制</strong>：保存 Cookie / localStorage 以及导航和 POST 步骤。</li>
+        <li style="padding-bottom:0">站点切换为 {{ mode_badge('recorded') }}，定时任务和「立即签到」会无头回放该流程。</li>
+      </ol>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><div><h2>已录制的站点</h2><p>录制数据保存在 <code>/data</code> 数据卷</p></div>{{ icon('database') }}</div>
+    {% set recorded = sites|selectattr('id', 'in', flows.keys()|list)|list %}
+    {% if recorded %}
+    <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>站点</th><th>步骤</th><th>更新时间</th><th class="t-actions"></th></tr></thead>
+      <tbody>
+        {% for s in recorded %}
+        <tr>
+          <td class="t-title">{{ s.name }}</td>
+          <td>{{ flows[s.id].step_count }}</td>
+          <td class="mono subtle">{{ flows[s.id].updated_at[:16]|replace('T', ' ') }}</td>
+          <td class="t-actions"><a class="btn btn-sm" href="/record?site_id={{ s.id }}">重新录制</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div class="empty" style="padding:32px 24px">
+      <div class="empty-ic">{{ icon('record') }}</div>
+      <h3>还没有录制</h3>
+      <p style="margin-bottom:0">完成第一次录制后会显示在这里。</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
 {% endblock %}

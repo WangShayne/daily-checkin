@@ -27,7 +27,12 @@ from checkin.models import (
     CheckInMode,
     SiteConfig,
 )
-from checkin.scheduler import reload_jobs, shutdown_scheduler, start_scheduler
+from checkin.scheduler import (
+    next_run_times,
+    reload_jobs,
+    shutdown_scheduler,
+    start_scheduler,
+)
 from checkin.web.record_routes import register_record_routes
 
 logger = logging.getLogger(__name__)
@@ -37,6 +42,13 @@ TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # Public paths that do not require login
 PUBLIC_PATHS = frozenset({"/login", "/logout", "/health"})
+
+STATUS_TEXT = {
+    "success": "签到成功",
+    "already": "今日已签",
+    "failed": "失败",
+    "skipped": "已跳过",
+}
 
 DEFAULT_USER = "admin"
 DEFAULT_PASSWORD = "changeme"
@@ -163,10 +175,27 @@ def _site_from_form(
     )
 
 
+def flash(request: Request, message: str, kind: str = "success") -> None:
+    """Queue a toast message for the next rendered page (session based)."""
+    items = list(request.session.get("_flash") or [])
+    items.append({"kind": kind, "message": message})
+    request.session["_flash"] = items[-5:]
+
+
 def _tpl(request: Request, name: str, context: dict[str, Any] | None = None) -> HTMLResponse:
+    flashes = list(request.session.pop("_flash", None) or [])
+    # Query-string messages (used by redirects from the recorder routes)
+    q = request.query_params
+    if q.get("err"):
+        flashes.append({"kind": "error", "message": q["err"]})
+    if q.get("msg"):
+        flashes.append({"kind": "success", "message": q["msg"]})
     ctx = {
         "version": __version__,
         "current_user": request.session.get("user"),
+        "flashes": flashes,
+        "path": request.url.path,
+        "default_password": _auth_password() == DEFAULT_PASSWORD,
     }
     if context:
         ctx.update(context)
@@ -270,12 +299,22 @@ def create_app() -> FastAPI:
         db = get_db()
         sites = db.list_sites()
         latest = db.latest_result_by_site()
+        today = db.stats_today()
+        stats = {
+            "total": len(sites),
+            "enabled": sum(1 for s in sites if s.enabled),
+            "ok_today": today["success"] + today["already"],
+            "failed_today": today["failed"],
+        }
         return _tpl(
             request,
             "index.html",
             {
                 "sites": sites,
                 "latest": latest,
+                "flows": db.list_flow_summaries(),
+                "next_runs": next_run_times(),
+                "stats": stats,
                 "mode_labels": MODE_LABELS,
                 "type_labels": TYPE_LABELS,
             },
@@ -314,6 +353,7 @@ def create_app() -> FastAPI:
 
     @app.post("/sites")
     async def site_create(
+        request: Request,
         name: str = Form(...),
         type: str = Form(...),
         mode: str = Form(...),
@@ -351,10 +391,12 @@ def create_app() -> FastAPI:
         )
         get_db().add_site(site)
         reload_jobs()
+        flash(request, f"已添加站点「{site.name}」")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/sites/{site_id}")
     async def site_update(
+        request: Request,
         site_id: int,
         name: str = Form(...),
         type: str = Form(...),
@@ -393,36 +435,77 @@ def create_app() -> FastAPI:
         )
         get_db().update_site(site_id, site)
         reload_jobs()
+        flash(request, f"已保存「{site.name}」")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/sites/{site_id}/delete")
-    async def site_delete(site_id: int) -> RedirectResponse:
+    async def site_delete(request: Request, site_id: int) -> RedirectResponse:
+        site = get_db().get_site(site_id)
         get_db().delete_site(site_id)
         reload_jobs()
+        if site:
+            flash(request, f"已删除「{site.name}」", "info")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/run")
-    def run_all() -> RedirectResponse:
-        run_all_from_db(triggered_by="manual")
+    def run_all(request: Request) -> RedirectResponse:
+        results = run_all_from_db(triggered_by="manual")
+        ok = sum(1 for r in results if r.ok)
+        failed = sum(1 for r in results if r.status.value == "failed")
+        flash(
+            request,
+            f"全部签到完成：成功 {ok}，失败 {failed}",
+            "error" if failed else "success",
+        )
         return RedirectResponse("/logs", status_code=303)
 
     @app.post("/sites/{site_id}/run")
-    def run_site(site_id: int) -> RedirectResponse:
-        run_one_site(site_id, triggered_by="manual")
+    def run_site(request: Request, site_id: int) -> RedirectResponse:
+        r = run_one_site(site_id, triggered_by="manual")
+        flash(
+            request,
+            f"「{r.site_name}」{STATUS_TEXT.get(r.status.value, r.status.value)}：{r.message}",
+            "success" if r.ok else "error",
+        )
         return RedirectResponse("/logs", status_code=303)
 
     @app.get("/logs", response_class=HTMLResponse)
-    async def logs(request: Request) -> HTMLResponse:
-        entries = get_db().list_run_logs(limit=200)
-        return _tpl(request, "logs.html", {"logs": entries})
+    async def logs(
+        request: Request,
+        status: str = "",
+        site_id: str = "",
+    ) -> HTMLResponse:
+        db = get_db()
+        sid = int(site_id) if site_id.isdigit() else None
+        entries = db.list_run_logs(limit=200, site_id=sid, status=status or None)
+        return _tpl(
+            request,
+            "logs.html",
+            {
+                "logs": entries,
+                "sites": db.list_sites(),
+                "f_status": status,
+                "f_site": sid,
+                "today": db.stats_today(),
+            },
+        )
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request) -> HTMLResponse:
         settings = get_db().get_settings()
-        return _tpl(request, "settings.html", {"settings": settings})
+        return _tpl(
+            request,
+            "settings.html",
+            {
+                "settings": settings,
+                "auth_user": _auth_username(),
+                "data_dir": os.environ.get("CHECKIN_DATA_DIR", "data"),
+            },
+        )
 
     @app.post("/settings")
     async def settings_save(
+        request: Request,
         timeout: int = Form(30),
         delay_between_sites: float = Form(2),
         continue_on_error: str | None = Form(None),
@@ -438,6 +521,7 @@ def create_app() -> FastAPI:
                 "notify_webhook_url": notify_webhook_url,
             }
         )
+        flash(request, "设置已保存")
         return RedirectResponse("/settings", status_code=303)
 
     @app.get("/health")

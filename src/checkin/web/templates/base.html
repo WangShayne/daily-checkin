@@ -1,35 +1,71 @@
+{% from "_macros.html" import icon %}
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}每日自动签到{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  {% include "_head.html" %}
+  <title>{% block title %}每日自动签到{% endblock %} · Daily Check-in</title>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <a href="/">🗓️ 每日自动签到</a>
-      <span class="muted">v{{ version | default('') }}</span>
-    </div>
-    <nav>
-      <a href="/">站点</a>
-      <a href="/sites/new">添加</a>
-      <a href="/record">录制</a>
-      <a href="/logs">日志</a>
-      <a href="/settings">设置</a>
-      {% if current_user %}
-      <span class="nav-user muted">{{ current_user }}</span>
-      <a href="/logout">退出</a>
-      {% endif %}
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/">
+      <span class="brand-logo">{{ icon('calendar') }}</span>
+      <span>每日自动签到<small>Daily Check-in v{{ version }}</small></span>
+    </a>
+    <nav class="nav">
+      <div class="nav-label">管理</div>
+      <a href="/" class="{{ 'active' if path == '/' or path.startswith('/sites') and not path.startswith('/sites/new') }}">{{ icon('dashboard') }}站点总览</a>
+      <a href="/sites/new" class="{{ 'active' if path == '/sites/new' }}">{{ icon('plus') }}添加站点</a>
+      <a href="/record" class="{{ 'active' if path.startswith('/record') }}">{{ icon('video') }}浏览器录制</a>
+      <div class="nav-label">监控</div>
+      <a href="/logs" class="{{ 'active' if path.startswith('/logs') }}">{{ icon('activity') }}运行日志</a>
+      <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">{{ icon('sliders') }}设置</a>
     </nav>
-  </header>
-  <main class="container">
-    {% block content %}{% endblock %}
-  </main>
-  <footer class="footer">
-    <span>时区：Asia/Shanghai · 端口 4567 · 请勿提交 Cookie / Token</span>
-  </footer>
+    <div class="sidebar-foot">
+      {% if current_user %}
+      <div class="user"><span class="avatar">{{ current_user[:1]|upper }}</span>{{ current_user }}</div>
+      <a href="/logout">{{ icon('logout', 'sm') }} 退出登录</a>
+      {% endif %}
+    </div>
+  </aside>
+  <div class="scrim" onclick="document.body.classList.remove('nav-open')"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="btn btn-ghost btn-icon menu-btn" type="button" aria-label="菜单"
+              onclick="document.body.classList.toggle('nav-open')">{{ icon('menu') }}</button>
+      <div class="crumbs">每日自动签到 / <strong>{% block crumb %}站点总览{% endblock %}</strong></div>
+      <div class="spacer"></div>
+      <span class="subtle small hide-sm">时区 Asia/Shanghai</span>
+      <button class="btn btn-ghost btn-icon" type="button" id="theme-toggle" aria-label="切换深色模式" title="切换深色 / 浅色">
+        <span class="when-light">{{ icon('moon') }}</span><span class="when-dark" hidden>{{ icon('sun') }}</span>
+      </button>
+    </header>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="footer">Daily Check-in v{{ version }} · Docker 自托管 · 凭证仅保存在本机数据卷，请勿提交到 Git</footer>
+  </div>
+</div>
+{% include "_toasts.html" %}
+<script>
+  (function () {
+    var btn = document.getElementById('theme-toggle');
+    function sync() {
+      var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      btn.querySelector('.when-light').hidden = dark;
+      btn.querySelector('.when-dark').hidden = !dark;
+    }
+    btn.addEventListener('click', function () {
+      var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      sync();
+    });
+    sync();
+  })();
+</script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

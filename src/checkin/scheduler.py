@@ -109,3 +109,20 @@ def shutdown_scheduler() -> None:
         _scheduler.shutdown(wait=False)
         logger.info("调度器已停止")
     _scheduler = None
+
+
+def next_run_times() -> dict[int, str]:
+    """site_id -> next run 'MM-DD HH:MM' (Asia/Shanghai) for scheduled sites."""
+    out: dict[int, str] = {}
+    sched = _scheduler
+    if sched is None:
+        return out
+    for job in sched.get_jobs():
+        if not job.id.startswith("site_") or job.next_run_time is None:
+            continue
+        try:
+            sid = int(job.id.split("_", 1)[1])
+        except ValueError:
+            continue
+        out[sid] = job.next_run_time.astimezone(SHANGHAI).strftime("%m-%d %H:%M")
+    return out

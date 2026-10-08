@@ -1,125 +1,171 @@
 {% extends "base.html" %}
-{% block title %}{{ title }} — 每日自动签到{% endblock %}
+{% from "_macros.html" import icon %}
+{% block title %}{{ title }}{% endblock %}
+{% block crumb %}{{ '编辑站点' if site else '添加站点' }}{% endblock %}
 {% block content %}
-<section class="toolbar">
-  <h1>{{ title }}</h1>
-  <a class="btn" href="/">← 返回</a>
-</section>
-
-<form class="card form" method="post"
-      action="{% if site %}{{ '/sites/' ~ site.id }}{% else %}/sites{% endif %}">
-  <div class="grid-2">
-    <label>站点名称 *
-      <input name="name" required value="{{ site.name if site else '' }}" placeholder="例如：我的论坛">
-    </label>
-    <label>启用
-      <select name="enabled">
-        <option value="1" {% if not site or site.enabled %}selected{% endif %}>启用</option>
-        <option value="0" {% if site and not site.enabled %}selected{% endif %}>禁用</option>
-      </select>
-    </label>
+{% set mode = site.mode if site else 'click' %}
+<div style="max-width:920px">
+<div class="page-head">
+  <div>
+    <a class="btn btn-ghost btn-sm" href="/" style="margin:0 0 8px -10px">{{ icon('arrow-left', 'sm') }}返回站点总览</a>
+    <h1>{{ title }}</h1>
+    <p>选择站点类型和签到方式。Cookie 等凭证仅保存在本机数据卷中。</p>
   </div>
+</div>
 
-  <div class="grid-2">
-    <label>站点类型 *
-      <select name="type" required>
-        {% for t in site_types %}
-        <option value="{{ t }}" {% if site and site.type == t %}selected{% endif %}>
-          {{ type_labels.get(t, t) }} ({{ t }})
-        </option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>签到方式 *
-      <select name="mode" required>
-        <option value="visit" {% if site and site.mode == 'visit' %}selected{% endif %}>
-          仅访问 — 每天打开页面即可
-        </option>
-        <option value="click" {% if not site or site.mode == 'click' %}selected{% endif %}>
-          点击/提交 — POST 表单 / API / 按钮
-        </option>
-        <option value="recorded" {% if site and site.mode == 'recorded' %}selected{% endif %}>
-          录制回放 — 使用「录制」页保存的浏览器流程
-        </option>
-      </select>
-    </label>
-  </div>
-
-  <div class="grid-2">
-    <label>基础 URL *
-      <input name="base_url" required value="{{ site.base_url if site else '' }}"
-             placeholder="https://example.com">
-    </label>
-    <label>路径（签到页 / 接口）
-      <input name="checkin_path" value="{{ site.checkin_path if site else '' }}"
-             placeholder="/plugin.php?id=sign 或留空表示首页">
-    </label>
-  </div>
-
-  <div class="grid-2">
-    <label>HTTP 方法（click 模式）
-      <select name="method">
-        {% set m = site.method if site else 'POST' %}
-        {% for method in ['POST', 'GET', 'PUT'] %}
-        <option value="{{ method }}" {% if m == method %}selected{% endif %}>{{ method }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Cookies（登录态，勿泄露）
-      <input name="cookies" value="{{ site.cookies if site and site.cookies else '' }}"
-             placeholder="sid=xxx; token=yyy">
-    </label>
-  </div>
-
-  <label>请求头 JSON（可选）
-    <textarea name="headers_json" rows="2"
-              placeholder='{"User-Agent":"Mozilla/5.0","Authorization":"Bearer ..."}'>{% if site and site.headers %}{{ site.headers | tojson }}{% endif %}</textarea>
-  </label>
-
-  <div class="grid-2">
-    <label>表单数据 JSON（click）
-      <textarea name="form_data_json" rows="2"
-                placeholder='{"operation":"qiandao"}'>{% if site and site.form_data %}{{ site.form_data | tojson }}{% endif %}</textarea>
-    </label>
-    <label>JSON Body（portal click）
-      <textarea name="body_json" rows="2"
-                placeholder='{"action":"daily"}'>{% if site and site.body %}{{ site.body | tojson }}{% endif %}</textarea>
-    </label>
-  </div>
-
-  <div class="grid-2">
-    <label>成功关键字（逗号分隔）
-      <input name="success_keywords"
-             value="{% if site %}{{ site.success_keywords | join(', ') }}{% endif %}"
-             placeholder="签到成功, 已签到, ok">
-    </label>
-    <label>成功 HTTP 状态码 JSON
-      <input name="success_status"
-             value="{% if site %}{{ site.success_status | tojson }}{% else %}[200]{% endif %}">
-    </label>
-  </div>
-
-  <fieldset>
-    <legend>定时计划（Asia/Shanghai）</legend>
-    <div class="grid-3">
-      <label>计划类型
-        <select name="schedule_type" id="schedule_type">
-          <option value="daily" {% if not site or site.schedule_type == 'daily' %}selected{% endif %}>每天固定时间</option>
-          <option value="cron" {% if site and site.schedule_type == 'cron' %}selected{% endif %}>Cron 表达式</option>
-        </select>
-      </label>
-      <label>每天时间（HH:MM）
-        <input name="daily_time" value="{{ site.daily_time if site else '09:00' }}" placeholder="09:00">
-      </label>
-      <label>Cron（分 时 日 月 周）
-        <input name="cron" value="{{ site.cron if site else '0 9 * * *' }}" placeholder="0 9 * * *">
-      </label>
+<form method="post" action="{% if site %}/sites/{{ site.id }}{% else %}/sites{% endif %}" id="site-form">
+  <div class="card">
+    <div class="card-head"><div><h2>基本信息</h2><p>站点名称与签到地址</p></div>
+      <label class="switch"><input type="checkbox" name="enabled" value="1" {% if not site or site.enabled %}checked{% endif %}><span class="track"></span>启用</label>
     </div>
-  </fieldset>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="field">
+          <label for="f-name">站点名称 *</label>
+          <input class="input" id="f-name" name="name" required value="{{ site.name if site else '' }}" placeholder="例如：我的论坛">
+        </div>
+        <div class="field">
+          <label for="f-type">站点类型 *</label>
+          <select class="select" id="f-type" name="type" required>
+            {% for t in site_types %}
+            <option value="{{ t }}" {% if site and site.type == t %}selected{% endif %}>{{ type_labels.get(t, t) }}（{{ t }}）</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-base">基础 URL *</label>
+          <input class="input" id="f-base" name="base_url" required value="{{ site.base_url if site else '' }}" placeholder="https://example.com">
+        </div>
+        <div class="field">
+          <label for="f-path">路径</label>
+          <input class="input" id="f-path" name="checkin_path" value="{{ site.checkin_path if site else '' }}" placeholder="/plugin.php?id=sign，留空表示首页">
+          <span class="hint">与基础 URL 拼接成签到页或接口地址</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div><h2>签到方式</h2><p>不同网站签到方式不同，选一个最贴近的</p></div></div>
+    <div class="card-body">
+      <div class="options">
+        <label class="option visit">
+          <input type="radio" name="mode" value="visit" {% if mode == 'visit' %}checked{% endif %}>
+          <div class="opt">
+            <div class="opt-title"><span class="opt-ic">{{ icon('globe') }}</span>仅访问</div>
+            <p>每天打开（GET）页面即算签到。通常需要带上登录 Cookie。</p>
+          </div>
+        </label>
+        <label class="option click">
+          <input type="radio" name="mode" value="click" {% if mode == 'click' %}checked{% endif %}>
+          <div class="opt">
+            <div class="opt-title"><span class="opt-ic">{{ icon('pointer') }}</span>点击 / 提交</div>
+            <p>提交签到表单、点签到按钮或调用 API（POST）。可在高级设置里配置表单与关键字。</p>
+          </div>
+        </label>
+        <label class="option recorded">
+          <input type="radio" name="mode" value="recorded" {% if mode == 'recorded' %}checked{% endif %}>
+          <div class="opt">
+            <div class="opt-title"><span class="opt-ic">{{ icon('record') }}</span>录制回放</div>
+            <p>登录流程复杂时使用：在「浏览器录制」页登录并签到一次，之后自动回放。</p>
+          </div>
+        </label>
+      </div>
+      <div class="alert alert-info" id="recorded-hint" style="margin:16px 0 0" {% if mode != 'recorded' %}hidden{% endif %}>
+        {{ icon('info') }}<div class="alert-body">保存后前往 <a href="/record{% if site %}?site_id={{ site.id }}{% endif %}">浏览器录制</a> 完成一次登录与签到，回放会使用录制时保存的 Cookie 和步骤。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div><h2>定时计划</h2><p>时区 Asia/Shanghai</p></div></div>
+    <div class="card-body">
+      {% set st = site.schedule_type if site else 'daily' %}
+      <div class="segmented" role="radiogroup" style="margin-bottom:16px">
+        <label><input type="radio" name="schedule_type" value="daily" {% if st != 'cron' %}checked{% endif %}><span>每天固定时间</span></label>
+        <label><input type="radio" name="schedule_type" value="cron" {% if st == 'cron' %}checked{% endif %}><span>Cron 表达式</span></label>
+      </div>
+      <div class="form-grid">
+        <div class="field" id="field-daily">
+          <label for="f-time">每天时间</label>
+          <input class="input" id="f-time" type="time" name="daily_time" value="{{ site.daily_time if site else '09:00' }}">
+        </div>
+        <div class="field" id="field-cron">
+          <label for="f-cron">Cron（分 时 日 月 周）</label>
+          <input class="input mono" id="f-cron" name="cron" value="{{ site.cron if site else '0 9 * * *' }}" placeholder="0 9 * * *">
+          <span class="hint">例：<code>30 8 * * *</code> 每天 8:30；<code>0 9 * * 1-5</code> 工作日 9:00</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div><h2>登录态</h2><p>访问需要登录的页面时使用（录制回放模式会自动保存，无需填写）</p></div>{{ icon('lock') }}</div>
+    <div class="card-body">
+      <div class="field">
+        <label for="f-cookies">Cookies</label>
+        <input class="input mono" id="f-cookies" name="cookies" value="{{ site.cookies if site and site.cookies else '' }}" placeholder="sid=xxx; token=yyy" autocomplete="off">
+        <span class="hint">从浏览器开发者工具复制。Cookie 等同登录凭证，请勿泄露。</span>
+      </div>
+      <div class="field" style="margin-bottom:0">
+        <label for="f-headers">请求头 JSON</label>
+        <textarea class="textarea" id="f-headers" name="headers_json" rows="2" placeholder='{"User-Agent": "Mozilla/5.0", "Authorization": "Bearer ..."}'>{% if site and site.headers %}{{ site.headers | tojson }}{% endif %}</textarea>
+      </div>
+    </div>
+
+    <details class="advanced" {% if site and (site.form_data or site.body or site.success_keywords) %}open{% endif %}>
+      <summary>{{ icon('chevron', 'sm chev') }}高级设置（请求方法、表单、成功判定）</summary>
+      <div class="card-body">
+        <div class="form-grid">
+          <div class="field">
+            <label for="f-method">HTTP 方法（点击/提交）</label>
+            {% set m = site.method if site else 'POST' %}
+            <select class="select" id="f-method" name="method">
+              {% for method in ['POST', 'GET', 'PUT'] %}<option value="{{ method }}" {% if m == method %}selected{% endif %}>{{ method }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-status">成功 HTTP 状态码</label>
+            <input class="input mono" id="f-status" name="success_status" value="{% if site %}{{ site.success_status | tojson }}{% else %}[200]{% endif %}">
+          </div>
+          <div class="field">
+            <label for="f-form">表单数据 JSON</label>
+            <textarea class="textarea" id="f-form" name="form_data_json" rows="2" placeholder='{"operation": "qiandao"}'>{% if site and site.form_data %}{{ site.form_data | tojson }}{% endif %}</textarea>
+          </div>
+          <div class="field">
+            <label for="f-body">JSON Body（门户 API）</label>
+            <textarea class="textarea" id="f-body" name="body_json" rows="2" placeholder='{"action": "daily"}'>{% if site and site.body %}{{ site.body | tojson }}{% endif %}</textarea>
+          </div>
+          <div class="field span-2" style="margin-bottom:0">
+            <label for="f-kw">成功关键字（逗号分隔）</label>
+            <input class="input" id="f-kw" name="success_keywords" value="{% if site %}{{ site.success_keywords | join(', ') }}{% endif %}" placeholder="签到成功, 已签到, ok">
+            <span class="hint">响应包含任一关键字即视为成功；包含「已签到 / already」会记为「今日已签」。</span>
+          </div>
+        </div>
+      </div>
+    </details>
+  </div>
 
   <div class="form-actions">
-    <button class="btn primary" type="submit">保存</button>
     <a class="btn" href="/">取消</a>
+    <button class="btn btn-primary" type="submit">{{ icon('check', 'sm') }}{{ '保存修改' if site else '创建站点' }}</button>
   </div>
 </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  (function () {
+    var f = document.getElementById('site-form');
+    function sync() {
+      var st = f.querySelector('input[name="schedule_type"]:checked').value;
+      document.getElementById('field-daily').style.opacity = st === 'daily' ? 1 : 0.45;
+      document.getElementById('field-cron').style.opacity = st === 'cron' ? 1 : 0.45;
+      var mode = f.querySelector('input[name="mode"]:checked').value;
+      document.getElementById('recorded-hint').hidden = mode !== 'recorded';
+    }
+    f.addEventListener('change', sync);
+    sync();
+  })();
+</script>
 {% endblock %}

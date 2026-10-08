@@ -1,89 +1,138 @@
 {% extends "base.html" %}
-{% block title %}站点列表 — 每日自动签到{% endblock %}
+{% from "_macros.html" import icon, status_badge, mode_badge %}
+{% block title %}站点总览{% endblock %}
+{% block crumb %}站点总览{% endblock %}
 {% block content %}
-<section class="toolbar">
-  <h1>站点列表</h1>
+<div class="page-head">
+  <div>
+    <h1>站点总览</h1>
+    <p>管理需要每日签到的网站，查看最近结果与下次运行时间。</p>
+  </div>
   <div class="actions">
-    <a class="btn" href="/record">🎥 录制会话</a>
-    <a class="btn" href="/sites/new">＋ 添加站点</a>
-    <form method="post" action="/run" style="display:inline">
-      <button class="btn primary" type="submit">▶ 全部立即签到</button>
+    <a class="btn" href="/record">{{ icon('video') }}录制会话</a>
+    <a class="btn" href="/sites/new">{{ icon('plus') }}添加站点</a>
+    <form class="inline" method="post" action="/run">
+      <button class="btn btn-primary" type="submit" {% if not sites %}disabled{% endif %}>{{ icon('play') }}全部立即签到</button>
     </form>
   </div>
-</section>
+</div>
 
-{% if not sites %}
-<p class="empty">还没有站点。点击「添加站点」，选择类型与签到方式（仅访问 / 点击提交）。</p>
-{% else %}
-<table class="table">
-  <thead>
-    <tr>
-      <th>名称</th>
-      <th>类型</th>
-      <th>方式</th>
-      <th>计划</th>
-      <th>启用</th>
-      <th>最近结果</th>
-      <th>操作</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for site in sites %}
-    {% set last = latest.get(site.id) if site.id else none %}
-    <tr>
-      <td>
-        <strong>{{ site.name }}</strong>
-        <div class="muted small">{{ site.base_url }}{{ site.checkin_path }}</div>
-      </td>
-      <td>{{ type_labels.get(site.type, site.type) }}</td>
-      <td>
-        {% if site.mode == 'visit' %}
-        <span class="badge visit">仅访问</span>
-        {% elif site.mode == 'recorded' %}
-        <span class="badge recorded">录制回放</span>
-        {% else %}
-        <span class="badge click">点击/提交</span>
-        {% endif %}
-      </td>
-      <td class="small">
-        {% if site.schedule_type == 'cron' %}
-        cron: {{ site.cron }}
-        {% else %}
-        每天 {{ site.daily_time }}
-        {% endif %}
-      </td>
-      <td>{% if site.enabled %}✅{% else %}⏸{% endif %}</td>
-      <td class="small">
-        {% if last %}
-        <span class="status-{{ last.status }}">{{ last.status }}</span>
-        <div class="muted">{{ last.created_at }}</div>
-        {% else %}
-        <span class="muted">暂无</span>
-        {% endif %}
-      </td>
-      <td class="row-actions">
-        <form method="post" action="/sites/{{ site.id }}/run" style="display:inline">
-          <button class="btn sm" type="submit">签到</button>
-        </form>
-        <a class="btn sm" href="/sites/{{ site.id }}/edit">编辑</a>
-        <a class="btn sm" href="/record">录制</a>
-        <form method="post" action="/sites/{{ site.id }}/delete" style="display:inline"
-              onsubmit="return confirm('确定删除「{{ site.name }}」？');">
-          <button class="btn sm danger" type="submit">删除</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+{% if default_password %}
+<div class="alert alert-warning">
+  {{ icon('alert') }}
+  <div class="alert-body"><strong>仍在使用默认密码。</strong>
+    <p>请通过环境变量 <code>CHECKIN_USER</code> / <code>CHECKIN_PASSWORD</code> / <code>CHECKIN_SESSION_SECRET</code> 修改后重启容器。</p></div>
+</div>
 {% endif %}
 
-<section class="help-card">
-  <h2>签到方式说明</h2>
-  <ul>
-    <li><strong>仅访问（visit）</strong>：每天打开 / GET 目标 URL 即算完成，适合「进站就算签到」的站点。</li>
-    <li><strong>点击/提交（click）</strong>：需要 POST 表单、点签到按钮或调用签到 API。</li>
-    <li><strong>录制回放（recorded）</strong>：在「录制」页用嵌入浏览器登录并签到一次，之后自动回放。</li>
-  </ul>
-</section>
+<div class="grid grid-4" style="margin-bottom:24px">
+  <div class="card stat"><div class="stat-icon indigo">{{ icon('layers') }}</div>
+    <div><div class="stat-label">站点总数</div><div class="stat-value">{{ stats.total }}</div></div></div>
+  <div class="card stat"><div class="stat-icon teal">{{ icon('zap') }}</div>
+    <div><div class="stat-label">已启用</div><div class="stat-value">{{ stats.enabled }}</div></div></div>
+  <div class="card stat"><div class="stat-icon green">{{ icon('check') }}</div>
+    <div><div class="stat-label">今日成功</div><div class="stat-value">{{ stats.ok_today }}</div></div></div>
+  <div class="card stat"><div class="stat-icon red">{{ icon('x-circle') }}</div>
+    <div><div class="stat-label">今日失败</div><div class="stat-value">{{ stats.failed_today }}</div></div></div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div><h2>站点列表</h2><p>{{ sites|length }} 个站点 · 定时任务按 Asia/Shanghai 时区运行</p></div>
+  </div>
+  {% if not sites %}
+  <div class="empty">
+    <div class="empty-ic">{{ icon('layers') }}</div>
+    <h3>还没有站点</h3>
+    <p>添加第一个需要签到的网站：选择类型和签到方式（仅访问 / 点击提交 / 录制回放），设置每天的运行时间。</p>
+    <div class="actions" style="justify-content:center">
+      <a class="btn btn-primary" href="/sites/new">{{ icon('plus') }}添加站点</a>
+      <a class="btn" href="/record">{{ icon('video') }}用浏览器录制</a>
+    </div>
+  </div>
+  {% else %}
+  <div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>站点</th>
+        <th class="hide-sm">类型</th>
+        <th>签到方式</th>
+        <th class="hide-sm">计划</th>
+        <th>最近结果</th>
+        <th class="t-actions">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for site in sites %}
+      {% set last = latest.get(site.id) %}
+      {% set flow = flows.get(site.id) %}
+      <tr>
+        <td>
+          <div class="site-cell">
+            <span class="site-avatar {{ '' if site.enabled else 'off' }}">{{ site.name[:1]|upper }}</span>
+            <div style="min-width:0">
+              <div class="t-title">{{ site.name }}
+                {% if not site.enabled %}<span class="badge badge-neutral" style="margin-left:6px">已停用</span>{% endif %}</div>
+              <div class="t-sub truncate" title="{{ site.base_url }}{{ site.checkin_path }}">{{ site.base_url }}{{ site.checkin_path }}</div>
+            </div>
+          </div>
+        </td>
+        <td class="hide-sm muted">{{ type_labels.get(site.type, site.type) }}</td>
+        <td>
+          {{ mode_badge(site.mode) }}
+          {% if site.mode == 'recorded' %}
+            <div class="t-sub" style="margin-top:4px">
+              {% if flow %}已录制 {{ flow.step_count }} 步{% else %}<span style="color:var(--warning)">尚未录制</span>{% endif %}
+            </div>
+          {% endif %}
+        </td>
+        <td class="hide-sm">
+          <div class="nowrap">{{ icon('clock', 'sm') }}
+            {% if site.schedule_type == 'cron' %}<span class="mono">{{ site.cron }}</span>{% else %}每天 {{ site.daily_time }}{% endif %}</div>
+          <div class="t-sub">{% if site.enabled and next_runs.get(site.id) %}下次 {{ next_runs[site.id] }}{% elif not site.enabled %}已暂停{% endif %}</div>
+        </td>
+        <td>
+          {% if last %}
+            {{ status_badge(last.status) }}
+            <div class="t-sub" style="margin-top:4px" title="{{ last.message }}">{{ last.created_at[5:16]|replace('T', ' ') }}</div>
+          {% else %}
+            <span class="subtle small">暂无记录</span>
+          {% endif %}
+        </td>
+        <td class="t-actions">
+          <form class="inline" method="post" action="/sites/{{ site.id }}/run">
+            <button class="btn btn-sm" type="submit" title="立即签到">{{ icon('play', 'sm') }}签到</button>
+          </form>
+          {% if site.mode == 'recorded' or site.type == 'browser' %}
+          <a class="btn btn-sm btn-icon" href="/record?site_id={{ site.id }}" title="重新录制">{{ icon('video', 'sm') }}</a>
+          {% endif %}
+          <a class="btn btn-sm btn-icon" href="/sites/{{ site.id }}/edit" title="编辑">{{ icon('pencil', 'sm') }}</a>
+          <form class="inline" method="post" action="/sites/{{ site.id }}/delete"
+                onsubmit="return confirm('确定删除「{{ site.name }}」？相关录制流程也会被删除。');">
+            <button class="btn btn-sm btn-icon btn-danger" type="submit" title="删除">{{ icon('trash', 'sm') }}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid grid-3" style="margin-top:24px">
+  <div class="card card-body">
+    <div style="margin-bottom:8px">{{ mode_badge('visit') }}</div>
+    <p class="muted small" style="margin:0">每天打开（GET）目标页面即算签到，适合「进站就算」的网站。</p>
+  </div>
+  <div class="card card-body">
+    <div style="margin-bottom:8px">{{ mode_badge('click') }}</div>
+    <p class="muted small" style="margin:0">提交签到表单或调用签到 API（POST），可配置成功关键字。</p>
+  </div>
+  <div class="card card-body">
+    <div style="margin-bottom:8px">{{ mode_badge('recorded') }}</div>
+    <p class="muted small" style="margin:0">在嵌入浏览器里登录并签到一次，之后用保存的会话和步骤自动回放。</p>
+  </div>
+</div>
 {% endblock %}

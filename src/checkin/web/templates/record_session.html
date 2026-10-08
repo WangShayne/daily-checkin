@@ -1,77 +1,79 @@
 {% extends "base.html" %}
-{% block title %}录制中 — 每日自动签到{% endblock %}
+{% from "_macros.html" import icon %}
+{% block title %}录制中{% endblock %}
+{% block crumb %}浏览器录制 / 录制会话{% endblock %}
 {% block content %}
-<section class="toolbar">
-  <h1>录制会话{% if site %} — {{ site.name }}{% endif %}</h1>
+<div class="page-head">
+  <div>
+    <a class="btn btn-ghost btn-sm" href="/record" style="margin:0 0 8px -10px">{{ icon('arrow-left', 'sm') }}返回录制页</a>
+    <h1>{% if session.active %}<span class="live-dot"></span>{% endif %}录制会话{% if site %} — {{ site.name }}{% endif %}</h1>
+    <p>在下方远程浏览器中完成登录与签到，然后点击「完成录制」。</p>
+  </div>
+  {% if session.active %}
   <div class="actions">
-    <form method="post" action="/record/finish" style="display:inline"
-          onsubmit="return confirm('确认已在远程桌面完成登录与签到？');">
-      <button class="btn primary" type="submit">✅ 完成录制</button>
+    <form class="inline" method="post" action="/record/cancel" onsubmit="return confirm('取消并丢弃本次录制？');">
+      <button class="btn btn-danger" type="submit">{{ icon('x', 'sm') }}取消</button>
     </form>
-    <form method="post" action="/record/cancel" style="display:inline"
-          onsubmit="return confirm('取消并丢弃本次录制？');">
-      <button class="btn danger" type="submit">取消</button>
+    <form class="inline" method="post" action="/record/finish" onsubmit="return confirm('确认已在远程桌面完成登录与签到？');">
+      <button class="btn btn-primary" type="submit">{{ icon('check', 'sm') }}完成录制</button>
     </form>
   </div>
-</section>
-
-{% if error %}
-<div class="alert error">{{ error }}</div>
-{% endif %}
+  {% endif %}
+</div>
 
 {% if not session.active %}
-<p class="empty">当前没有活动录制。<a href="/record">返回录制页</a></p>
-{% else %}
-<div class="card" style="margin-bottom:0.75rem">
-  <div class="muted small">
-    状态：<strong>{{ session.status }}</strong>
-    · 步骤数：{{ session.step_count }}
-    · 当前 URL：{{ session.current_url or '-' }}
-    · 开始：{{ session.started_at }}
+<div class="card">
+  <div class="empty">
+    <div class="empty-ic">{{ icon('video') }}</div>
+    <h3>当前没有活动的录制会话</h3>
+    <p>会话可能已完成、被取消或启动失败。返回录制页重新开始。</p>
+    <a class="btn btn-primary" href="/record">返回录制页</a>
   </div>
-  {% if session.vnc_password %}
-  <div class="muted small">VNC 密码（若客户端要求）：<code id="vnc-pass">{{ session.vnc_password }}</code></div>
-  {% endif %}
+</div>
+{% else %}
+<div class="card card-body" style="padding:12px 20px;margin-bottom:16px">
+  <div class="session-meta">
+    <span>状态 <b>{{ session.status }}</b></span>
+    <span>步骤 <b id="meta-steps">{{ session.step_count }}</b></span>
+    <span class="truncate" style="max-width:520px">当前页面 <b id="meta-url">{{ session.current_url or '-' }}</b></span>
+    <span>开始于 <b>{{ session.started_at[11:19] }}</b></span>
+    {% if session.vnc_password %}<span>VNC 密码 <code id="vnc-pass">{{ session.vnc_password }}</code></span>{% endif %}
+  </div>
 </div>
 
 {% if novnc_ok %}
 <div id="vnc-status" class="vnc-status pending">远程桌面：正在连接…</div>
-<iframe
-  id="vnc-frame"
-  class="vnc-frame"
-  title="远程浏览器"
-  data-password="{{ session.vnc_password }}"
-  allow="clipboard-read; clipboard-write"
-></iframe>
+<iframe id="vnc-frame" class="vnc-frame" title="远程浏览器"
+        data-password="{{ session.vnc_password }}" allow="clipboard-read; clipboard-write"></iframe>
 <details id="vnc-diag" class="card diag">
-  <summary>连接诊断（连不上时展开）</summary>
+  <summary>{{ icon('activity', 'sm') }} 连接诊断（连不上时展开）</summary>
   <pre id="vnc-diag-body">加载中…</pre>
 </details>
 {% else %}
-<div class="alert error">
-  镜像中未找到 noVNC（/usr/share/novnc）。请使用项目 Dockerfile 构建。
-</div>
+<div class="alert alert-error">{{ icon('x-circle') }}<div class="alert-body"><strong>镜像中未找到 noVNC。</strong><p>请使用项目 Dockerfile 重新构建镜像：<code>docker compose up -d --build</code></p></div></div>
 {% endif %}
 
-<p class="muted small" style="margin-top:0.75rem">
-  提示：在画面中完成登录与签到后点「完成录制」。WebSocket 地址与本页同主机同端口（<code>/ws/vnc</code>），
-  通过局域网 IP 访问（如 http://192.168.x.x:4567）同样可用。
+<p class="subtle small" style="margin-top:12px">
+  WebSocket 与本页同主机同端口（<code>/ws/vnc</code>），通过局域网 IP（如 http://192.168.x.x:4567）访问同样可用。
 </p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if session.active and novnc_ok %}
 <script>
 (function () {
   const frame = document.getElementById('vnc-frame');
   const statusEl = document.getElementById('vnc-status');
   const diagEl = document.getElementById('vnc-diag-body');
-  if (!frame) return;
 
-  // Build the WebSocket target from the page's own origin — never localhost
-  // or a separate port — so LAN IP / reverse proxy access works.
+  // WebSocket target = the page's own origin (never localhost / a separate port),
+  // so LAN-IP and reverse-proxy access work.
   const loc = window.location;
   const https = loc.protocol === 'https:';
-  const port = loc.port || (https ? '443' : '80');
   const params = new URLSearchParams({
     host: loc.hostname,
-    port: port,
+    port: loc.port || (https ? '443' : '80'),
     encrypt: https ? '1' : '0',
     path: 'ws/vnc',
     password: frame.dataset.password || '',
@@ -104,9 +106,7 @@
   let failures = 0;
   setInterval(async () => {
     let cls = '';
-    try {
-      cls = frame.contentDocument && frame.contentDocument.documentElement.className;
-    } catch (e) { /* cross-origin should not happen */ }
+    try { cls = frame.contentDocument && frame.contentDocument.documentElement.className; } catch (e) {}
     if (/noVNC_connected/.test(cls)) {
       failures = 0;
       setStatus('ok', '远程桌面：已连接 ✅');
@@ -130,9 +130,12 @@
     try {
       const r = await fetch('/api/record/status', { credentials: 'same-origin' });
       const j = await r.json();
-      if (j.active) document.title = '录制中 (' + j.step_count + ')';
+      if (!j.active) return;
+      document.title = '录制中 (' + j.step_count + ') · 每日自动签到';
+      document.getElementById('meta-steps').textContent = j.step_count;
+      document.getElementById('meta-url').textContent = j.current_url || '-';
     } catch (e) {}
-  }, 5000);
+  }, 3000);
 })();
 </script>
 {% endif %}

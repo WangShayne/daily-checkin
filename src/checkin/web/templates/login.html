@@ -1,29 +1,55 @@
+{% from "_macros.html" import icon %}
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>登录 — 每日自动签到</title>
-  <link rel="stylesheet" href="/static/style.css">
+  {% include "_head.html" %}
+  <title>登录 · 每日自动签到</title>
 </head>
-<body class="login-page">
-  <main class="login-card">
-    <h1>🗓️ 每日自动签到</h1>
-    <p class="muted">请登录后管理站点与签到任务</p>
-    {% if error %}
-    <div class="alert error">{{ error }}</div>
-    {% endif %}
-    <form method="post" action="/login" class="form">
-      <input type="hidden" name="next" value="{{ next }}">
-      <label>用户名
-        <input name="username" required autocomplete="username" autofocus placeholder="admin">
-      </label>
-      <label>密码
-        <input name="password" type="password" required autocomplete="current-password" placeholder="••••••••">
-      </label>
-      <button class="btn primary block" type="submit">登录</button>
-    </form>
-    <p class="hint muted small">默认账号见 README / 环境变量 CHECKIN_USER、CHECKIN_PASSWORD。部署后请尽快修改。</p>
-  </main>
+<body>
+<div class="auth">
+  <section class="auth-hero">
+    <div class="brand" style="padding:0">
+      <span class="brand-logo">{{ icon('calendar') }}</span>
+      <span>每日自动签到<small>Daily Check-in</small></span>
+    </div>
+    <div>
+      <h2>再也不会忘记签到</h2>
+      <p>自托管的多站点每日签到工具。门户、论坛、需要登录的网站都能按计划自动完成。</p>
+      <ul>
+        <li>{{ icon('globe') }}仅访问：打开页面即算签到</li>
+        <li>{{ icon('pointer') }}点击 / 提交：POST 表单或签到 API</li>
+        <li>{{ icon('record') }}录制回放：浏览器里登录一次，之后自动回放</li>
+        <li>{{ icon('shield') }}凭证只保存在你自己的 Docker 数据卷</li>
+      </ul>
+    </div>
+    <div class="small" style="color:#818cf8">v{{ version }} · Asia/Shanghai</div>
+  </section>
+
+  <section class="auth-panel">
+    <div class="auth-card">
+      <h1>登录管理后台</h1>
+      <p class="muted">请使用部署时配置的账号登录</p>
+      {% if error %}
+      <div class="alert alert-error">{{ icon('x-circle') }}<div>{{ error }}</div></div>
+      {% endif %}
+      <form method="post" action="/login">
+        <input type="hidden" name="next" value="{{ next }}">
+        <div class="field">
+          <label for="username">用户名</label>
+          <input class="input" id="username" name="username" required autocomplete="username" autofocus placeholder="admin">
+        </div>
+        <div class="field">
+          <label for="password">密码</label>
+          <input class="input" id="password" name="password" type="password" required autocomplete="current-password" placeholder="••••••••">
+        </div>
+        <button class="btn btn-primary btn-block btn-lg" type="submit">登录</button>
+      </form>
+      <p class="subtle small" style="margin-top:20px">
+        {{ icon('key', 'sm') }} 账号由环境变量 <code>CHECKIN_USER</code> / <code>CHECKIN_PASSWORD</code> 配置（默认 admin / changeme，部署后请修改）。
+      </p>
+    </div>
+  </section>
+</div>
+{% include "_toasts.html" %}
 </body>
 </html>

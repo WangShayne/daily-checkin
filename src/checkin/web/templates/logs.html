@@ -1,39 +1,64 @@
 {% extends "base.html" %}
-{% block title %}运行日志 — 每日自动签到{% endblock %}
+{% from "_macros.html" import icon, status_badge, mode_badge, trigger_label %}
+{% block title %}运行日志{% endblock %}
+{% block crumb %}运行日志{% endblock %}
 {% block content %}
-<section class="toolbar">
-  <h1>运行日志</h1>
-  <a class="btn" href="/">← 返回</a>
-</section>
+<div class="page-head">
+  <div>
+    <h1>运行日志</h1>
+    <p>最近 200 条签到记录 · 今日 {{ today.total }} 次，成功 {{ today.success + today.already }}，失败 {{ today.failed }}</p>
+  </div>
+  <div class="actions">
+    <form class="inline" method="post" action="/run">
+      <button class="btn btn-primary" type="submit">{{ icon('play') }}全部立即签到</button>
+    </form>
+  </div>
+</div>
 
-{% if not logs %}
-<p class="empty">暂无运行记录。可在首页点击「立即签到」。</p>
-{% else %}
-<table class="table">
-  <thead>
-    <tr>
-      <th>时间</th>
-      <th>站点</th>
-      <th>方式</th>
-      <th>状态</th>
-      <th>触发</th>
-      <th>HTTP</th>
-      <th>说明</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for log in logs %}
-    <tr>
-      <td class="small">{{ log.created_at }}</td>
-      <td>{{ log.site_name }}</td>
-      <td>{{ log.mode or '-' }}</td>
-      <td><span class="status-{{ log.status }}">{{ log.status }}</span></td>
-      <td class="small">{{ log.triggered_by }}</td>
-      <td>{{ log.http_status or '-' }}</td>
-      <td class="small">{{ log.message }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+<div class="card">
+  <div class="card-head" style="flex-wrap:wrap">
+    {% set qs_site = ('&site_id=' ~ f_site) if f_site else '' %}
+    <div class="filters">
+      {% for key, label in [('', '全部'), ('success', '签到成功'), ('already', '今日已签'), ('failed', '失败'), ('skipped', '已跳过')] %}
+      <a class="chip {{ 'active' if f_status == key }}" href="/logs?status={{ key }}{{ qs_site }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <form method="get" action="/logs" class="filters">
+      <input type="hidden" name="status" value="{{ f_status }}">
+      <select class="select" name="site_id" style="height:32px;width:200px" onchange="this.form.submit()" aria-label="按站点筛选">
+        <option value="">所有站点</option>
+        {% for s in sites %}<option value="{{ s.id }}" {% if f_site == s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+      </select>
+    </form>
+  </div>
+  {% if not logs %}
+  <div class="empty">
+    <div class="empty-ic">{{ icon('activity') }}</div>
+    <h3>暂无运行记录</h3>
+    <p>{% if f_status or f_site %}当前筛选条件下没有记录。{% else %}定时任务运行或手动签到后，结果会显示在这里。{% endif %}</p>
+    {% if f_status or f_site %}<a class="btn" href="/logs">清除筛选</a>{% else %}<a class="btn btn-primary" href="/">去站点总览</a>{% endif %}
+  </div>
+  {% else %}
+  <div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr><th>时间</th><th>站点</th><th class="hide-sm">方式</th><th>结果</th><th class="hide-sm">触发</th><th class="hide-sm">HTTP</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr>
+        <td class="nowrap mono">{{ log.created_at[:19]|replace('T', ' ') }}</td>
+        <td class="t-title">{{ log.site_name }}</td>
+        <td class="hide-sm">{% if log.mode %}{{ mode_badge(log.mode) }}{% else %}<span class="subtle">-</span>{% endif %}</td>
+        <td>{{ status_badge(log.status) }}</td>
+        <td class="hide-sm"><span class="badge badge-neutral">{{ trigger_label(log.triggered_by) }}</span></td>
+        <td class="hide-sm mono">{{ log.http_status or '-' }}</td>
+        <td class="msg">{{ log.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
 {% endblock %}
